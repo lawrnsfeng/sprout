@@ -1,0 +1,89 @@
+[project]
+name = "sprout"
+version = "0.1.0"
+description = "Async recursive tree traversal framework with retry, concurrency gating, and timeout policies."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "tenacity>=9.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.0",
+    "pre-commit>=4.5.0",
+    "ruff>=0.14.8",
+    "ty>=0.0.1a32",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+]
+
+[build-system]
+requires = ["hatchling", "versioningit"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "versioningit"
+default-version = "0.0.0+unknown"
+
+[tool.hatch.version.format]
+distance = "{next_version}.dev{distance}+{vcs}{rev}"
+dirty = "{version}+dirty"
+distance-dirty = "{next_version}.dev{distance}+{vcs}{rev}.dirty"
+
+[tool.hatch.build]
+artifacts = ["sprout/_version.py"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["sprout"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["sprout"]
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+select = ["ALL"]
+exclude = ["*mock*.py"]
+ignore = [
+    "D100",  # undocumented-public-module
+    "D104",  # undocumented-public-package
+    "D105",  # undocumented-magic-method
+    "D203",  # one-blank-line-before-class
+    "D213",  # multi-line-summary-second-line
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = [
+    "S101", "ARG001", "PLR2004", "EM101", "SLF001", "TRY003",
+]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["sprout", "tests"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+ignore_missing_imports = true
+no_implicit_reexport = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.pdm.scripts]
+lint = "ruff check --fix"
+tc = "mypy ."
+pre = "pre-commit run --all-files"
+test = "python -m pytest tests"
+testv = "python -m pytest -s tests"
+cov = "python -m pytest --cov=sprout --cov-report=term-missing tests"
