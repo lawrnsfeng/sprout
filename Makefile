@@ -31,6 +31,10 @@ cov:
 .PHONY: check
 check: lint tc test
 
+.PHONY: docs
+docs:
+	@uv run --group docs mkdocs serve
+
 .PHONY: next-version
 next-version:
 	@uvx --from python-semantic-release semantic-release --noop version --print

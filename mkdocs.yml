@@ -1,0 +1,39 @@
+---
+site_name: sprout
+site_description: Async recursive tree traversal framework
+site_url: https://lawrnsfeng.github.io/sprout/
+repo_url: https://github.com/lawrnsfeng/sprout
+repo_name: lawrnsfeng/sprout
+theme:
+  name: material
+  palette:
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+nav:
+  - Home: index.md
+  - Usage: usage.md
+  - API Reference: api.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            docstring_style: google
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - admonition
