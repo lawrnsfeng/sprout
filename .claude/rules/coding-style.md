@@ -127,6 +127,13 @@ def run(*, verbose: bool) -> None: ...
 
 Intermediate dict variable: `mp_<keytype>_<valuetype>` (e.g. `mp_str_int`).
 
+### Module names
+
+Never name a module after a stdlib module (`types.py`, `io.py`, `email.py`, ...) —
+it shadows the stdlib name for every absolute import inside the package and forces
+awkward relative-import gymnastics. Pick a distinguishing name instead
+(`typedefs.py`, not `types.py`).
+
 ## Immutability
 
 Return new objects rather than mutating in place.
