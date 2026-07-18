@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import traceback
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
 
 from .clock import DynamicClock, GrandClock, StaticClock
 from .concurrency import ConcurrencyGate
@@ -35,8 +35,8 @@ class _SpawnContext[T]:
     """
 
     report: TraversalReport
-    live_tasks: set[asyncio.Task[Any]]
-    node_map: dict[asyncio.Task[Any], "TreeNode[T]"]
+    live_tasks: set[asyncio.Task[FetchResult[T]]]
+    node_map: dict[asyncio.Task[FetchResult[T]], "TreeNode[T]"]
     max_depth: int | None
     clock: GrandClock
 
@@ -158,14 +158,13 @@ class Executor[T]:
 
         root_node: TreeNode[T] = TreeNode(ref=root_ref, depth=0)
         report = TraversalReport()
-        live_tasks: set[asyncio.Task[Any]] = set()
-        node_map: dict[asyncio.Task[Any], TreeNode[T]] = {}
+        live_tasks: set[asyncio.Task[FetchResult[T]]] = set()
+        node_map: dict[asyncio.Task[FetchResult[T]], TreeNode[T]] = {}
 
         self._parent_map[root_ref.id] = None
         self._seen_refs.add(root_ref.id)
 
         timeout_task = asyncio.create_task(clock.wait_for_timeout())
-        live_tasks.add(timeout_task)
 
         ctx: _SpawnContext[T] = _SpawnContext(
             report=report,
@@ -180,9 +179,19 @@ class Executor[T]:
         node_map[root_task] = root_node
 
         while live_tasks:
-            done, live_tasks = await asyncio.wait(
-                live_tasks,
+            wait_set: set[
+                asyncio.Task[FetchResult[T]] | asyncio.Task[None]
+            ] = {
+                timeout_task,
+                *live_tasks,
+            }
+            done, pending = await asyncio.wait(
+                wait_set,
                 return_when=asyncio.FIRST_COMPLETED,
+            )
+            live_tasks = cast(
+                "set[asyncio.Task[FetchResult[T]]]",
+                {task for task in pending if task is not timeout_task},
             )
             ctx.live_tasks = live_tasks
 
@@ -191,10 +200,11 @@ class Executor[T]:
                     await self._handle_timeout(report, live_tasks, node_map)
                     break
 
-                node = node_map.pop(task)
+                fetch_task = cast("asyncio.Task[FetchResult[T]]", task)
+                node = node_map.pop(fetch_task)
 
                 try:
-                    fetch_result = await task
+                    fetch_result = await fetch_task
                     self._handle_success_and_spawn_children(
                         node,
                         fetch_result,
@@ -208,12 +218,10 @@ class Executor[T]:
                         live_tasks,
                     )
 
-            if live_tasks == {timeout_task}:
-                timeout_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await timeout_task
-                live_tasks.clear()
-                break
+        if not timeout_task.done():
+            timeout_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timeout_task
 
         report.elapsed_ms = clock.elapsed_ms
         return root_node, report
@@ -221,8 +229,8 @@ class Executor[T]:
     async def _handle_timeout(
         self,
         report: TraversalReport,
-        live_tasks: set[asyncio.Task[Any]],
-        node_map: dict[asyncio.Task[Any], "TreeNode[T]"],
+        live_tasks: set[asyncio.Task[FetchResult[T]]],
+        node_map: dict[asyncio.Task[FetchResult[T]], "TreeNode[T]"],
     ) -> None:
         """Cancel all live tasks on grand timeout and mark nodes."""
         report.timed_out = True
@@ -257,7 +265,7 @@ class Executor[T]:
         node: "TreeNode[T]",
         exc: Exception,
         report: TraversalReport,
-        live_tasks: set[asyncio.Task[Any]],
+        live_tasks: set[asyncio.Task[FetchResult[T]]],
     ) -> None:
         """Handle fetch error — skip_mark or abort depending on policy.
 
