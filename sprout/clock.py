@@ -1,4 +1,4 @@
-"""Grand timeout clocks for async tree traversal."""
+"""Grand timeout clocks for Sprout traversal."""
 
 import asyncio
 import time

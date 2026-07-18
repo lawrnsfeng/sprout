@@ -1,15 +1,15 @@
-"""Exception types for async tree traversal."""
+"""Exception types for Sprout traversal."""
 
 
-class AsyncTreeError(Exception):
-    """Base exception for async tree operations."""
+class SproutError(Exception):
+    """Base exception for Sprout operations."""
 
 
-class GrandTimeoutExceededError(AsyncTreeError):
+class GrandTimeoutExceededError(SproutError):
     """Raised when grand timeout is exceeded during traversal."""
 
 
-class AsyncTreeFetcherError(AsyncTreeError):
+class FetcherError(SproutError):
     """Raised when a user-provided fetcher fails after retries.
 
     Attributes:
@@ -31,7 +31,7 @@ class AsyncTreeFetcherError(AsyncTreeError):
         self.original_error = original_error
 
 
-class TraversalAbortedError(AsyncTreeError):
+class TraversalAbortedError(SproutError):
     """Raised when traversal is aborted due to a node error.
 
     Attributes:

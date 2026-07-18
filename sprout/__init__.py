@@ -8,14 +8,14 @@ This package is standalone — it has zero dependencies on any other
 first-party package.
 """
 
-from .config import AsyncTreeExecutorConfig, AsyncTreeSettings
+from .config import ExecutorConfig, SproutSettings
 from .exceptions import (
-    AsyncTreeError,
-    AsyncTreeFetcherError,
+    FetcherError,
     GrandTimeoutExceededError,
+    SproutError,
     TraversalAbortedError,
 )
-from .executor import AsyncTreeExecutor
+from .executor import Executor
 from .graph_dump import dump_execution_graph
 from .models import (
     ChildRef,
@@ -34,14 +34,12 @@ from .types import (
 )
 
 __all__ = [
-    "AsyncTreeError",
-    "AsyncTreeExecutor",
-    "AsyncTreeExecutorConfig",
-    "AsyncTreeFetcherError",
-    "AsyncTreeSettings",
     "ChildRef",
+    "Executor",
+    "ExecutorConfig",
     "FetchResult",
     "Fetcher",
+    "FetcherError",
     "GrandTimeoutExceededError",
     "NodeError",
     "OnNodeError",
@@ -49,6 +47,8 @@ __all__ = [
     "RetryAfterHook",
     "RetryConfig",
     "RetryPredicate",
+    "SproutError",
+    "SproutSettings",
     "TraversalAbortedError",
     "TraversalReport",
     "TreeNode",

@@ -1,11 +1,11 @@
-"""Tests for asynctree with deep trees (stress test)."""
+"""Tests for Sprout with deep trees (stress test)."""
 
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
 )
 
@@ -33,8 +33,8 @@ async def test_deep_tree_depth_50() -> None:
             child_refs=[ChildRef(id=f"d{depth + 1}")],
         )
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=60.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=60.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_bounded(
         ChildRef(id="d0"),
@@ -58,12 +58,12 @@ async def test_deep_tree_path_tracking() -> None:
             raise RuntimeError(msg)
         return FetchResult(child_refs=[ChildRef(id=f"n{depth + 1}")])
 
-    config = AsyncTreeExecutorConfig(
+    config = ExecutorConfig(
         retry_max_attempts=1,
         max_at_once=5,
         level_timeout=30.0,
     )
-    executor = AsyncTreeExecutor[SampleItem](
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",

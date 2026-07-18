@@ -1,4 +1,4 @@
-"""Tests targeting coverage gaps in asynctree."""
+"""Tests targeting coverage gaps in Sprout."""
 
 import asyncio
 import json
@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
 )
 from sprout.clock import DynamicClock
@@ -45,8 +45,8 @@ async def test_cancellation_marks_node_as_partial() -> None:
         await asyncio.sleep(5.0)
         return FetchResult(items=[SampleItem("never")])
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=0.1)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=0.1)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
@@ -79,8 +79,8 @@ async def test_early_cancel_check_in_fetch() -> None:
         await asyncio.sleep(0.5)
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(max_at_once=1, level_timeout=0.1)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=1, level_timeout=0.1)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
@@ -96,8 +96,8 @@ async def test_short_traceback_no_truncation() -> None:
         msg = "short"
         raise ValueError(msg)
 
-    config = AsyncTreeExecutorConfig(retry_max_attempts=1, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](
+    config = ExecutorConfig(retry_max_attempts=1, max_at_once=5)
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",
@@ -321,8 +321,8 @@ async def test_long_traceback_is_truncated() -> None:
         _deep_a()
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(retry_max_attempts=1, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](
+    config = ExecutorConfig(retry_max_attempts=1, max_at_once=5)
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",
@@ -347,8 +347,8 @@ async def test_dump_after_timeout_execution(tmp_path: Path) -> None:
         await asyncio.sleep(5.0)
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=0.1)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=0.1)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 

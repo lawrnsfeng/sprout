@@ -1,11 +1,11 @@
-"""Tests for asynctree duplicate child ref detection."""
+"""Tests for Sprout duplicate child ref detection."""
 
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
 )
 
@@ -38,8 +38,8 @@ async def test_duplicate_ref_is_skipped_with_warning() -> None:
             )
         return FetchResult(items=[SampleItem(f"file-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=2.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=2.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
@@ -67,8 +67,8 @@ async def test_duplicate_across_branches_is_skipped() -> None:
             return FetchResult(child_refs=[ChildRef(id="shared-node")])
         return FetchResult(items=[SampleItem(f"item-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=2.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=2.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=3)
 
@@ -92,8 +92,8 @@ async def test_no_infinite_loop_with_circular_refs() -> None:
             return FetchResult(child_refs=[ChildRef(id="root")])
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=2.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=2.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_bounded(
         ChildRef(id="root"),

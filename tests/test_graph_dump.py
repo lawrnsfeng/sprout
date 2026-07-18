@@ -1,11 +1,11 @@
-"""Tests for asynctree graph dump module."""
+"""Tests for Sprout graph dump module."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from sprout import AsyncTreeExecutor, AsyncTreeExecutorConfig
+from sprout import Executor, ExecutorConfig
 from sprout.graph_dump import dump_execution_graph
 from sprout.models import (
     ChildRef,
@@ -168,8 +168,8 @@ async def test_dump_after_real_execution(tmp_path: Path) -> None:
             )
         return FetchResult(items=[DummyItem(f"file-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=2.0)
-    executor = AsyncTreeExecutor[DummyItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=2.0)
+    executor = Executor[DummyItem](fetcher=fetcher, config=config)
 
     tree_result, report_result = await executor.expand_bounded(
         ChildRef(id="root"),

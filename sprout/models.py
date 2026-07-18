@@ -1,10 +1,10 @@
-"""Data models for async tree traversal."""
+"""Data models for Sprout traversal."""
 
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-@dataclass
+@dataclass(frozen=True)
 class ChildRef:
     """Reference to a child node to be recursively fetched.
 
@@ -18,8 +18,8 @@ class ChildRef:
     payload: Any = None
 
 
-@dataclass
-class FetchResult[Item]:
+@dataclass(frozen=True)
+class FetchResult[T]:
     """Result from fetching a node's children.
 
     Attributes:
@@ -29,12 +29,12 @@ class FetchResult[Item]:
 
     """
 
-    items: list[Item] = field(default_factory=list)
+    items: list[T] = field(default_factory=list)
     child_refs: list[ChildRef] = field(default_factory=list)
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, object] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(frozen=True)
 class NodeError:
     """Error information for a failed or skipped node.
 
@@ -65,7 +65,7 @@ class NodeError:
 
 
 @dataclass
-class TreeNode[Item]:
+class TreeNode[T]:
     """A node in the fetched tree.
 
     Attributes:
@@ -79,8 +79,8 @@ class TreeNode[Item]:
     """
 
     ref: ChildRef | None = None
-    result: "FetchResult[Item] | None" = None
-    children: "list[TreeNode[Item]]" = field(default_factory=list)
+    result: "FetchResult[T] | None" = None
+    children: "list[TreeNode[T]]" = field(default_factory=list)
     error: NodeError | None = None
     partial: bool = False
     depth: int = 0

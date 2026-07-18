@@ -26,6 +26,27 @@ class Stack[T]:
     def push(self, item: T) -> None: ...
 ```
 
+### Type parameter naming
+
+Generic type parameters are named `T`, or `SomethingT` when a descriptive name adds
+clarity (e.g. multiple type parameters that would otherwise collide, or a name that
+disambiguates intent like `KeyT`/`ValueT`). Never use a bare descriptive noun like
+`Item` or `Value` as a type parameter name.
+
+- Single type parameter → always `T`.
+- Multiple type parameters → suffix each with `T`: `KeyT`, `ValueT`, `ResultT`.
+
+```python
+# Wrong
+class Fetcher[Item](Protocol): ...
+
+# Correct — single param
+class Fetcher[T](Protocol): ...
+
+# Correct — multiple params
+class Cache[KeyT, ValueT]: ...
+```
+
 Use `TypeVar` only when a third-party API requires it.
 
 Never add `from __future__ import annotations`. Resolve forward references with

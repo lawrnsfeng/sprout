@@ -2,12 +2,11 @@
 
 import json
 from pathlib import Path
-from typing import Any
 
 from .models import NodeError, TraversalReport, TreeNode
 
 
-def _serialize_node[Item](node: TreeNode[Item]) -> dict[str, Any]:
+def _serialize_node[T](node: TreeNode[T]) -> dict[str, object]:
     """Recursively serialize a TreeNode to a dict.
 
     Args:
@@ -25,7 +24,7 @@ def _serialize_node[Item](node: TreeNode[Item]) -> dict[str, Any]:
     elif node.result is None:
         status = "pending"
 
-    result: dict[str, Any] = {
+    result: dict[str, object] = {
         "node_id": node.ref.id if node.ref else "root",
         "depth": node.depth,
         "status": status,
@@ -39,7 +38,7 @@ def _serialize_node[Item](node: TreeNode[Item]) -> dict[str, Any]:
     return result
 
 
-def _serialize_error(error: NodeError) -> dict[str, Any]:
+def _serialize_error(error: NodeError) -> dict[str, object]:
     """Serialize a NodeError to a dict.
 
     Args:
@@ -60,7 +59,7 @@ def _serialize_error(error: NodeError) -> dict[str, Any]:
     }
 
 
-def _serialize_report(report: TraversalReport) -> dict[str, Any]:
+def _serialize_report(report: TraversalReport) -> dict[str, object]:
     """Serialize a TraversalReport to a dict.
 
     Args:
@@ -81,8 +80,8 @@ def _serialize_report(report: TraversalReport) -> dict[str, Any]:
     }
 
 
-def dump_execution_graph[Item](
-    tree: TreeNode[Item],
+def dump_execution_graph[T](
+    tree: TreeNode[T],
     report: TraversalReport,
     path: Path,
 ) -> None:
@@ -99,7 +98,7 @@ def dump_execution_graph[Item](
         path: File path to write the JSON output to.
 
     """
-    output: dict[str, Any] = {
+    output: dict[str, object] = {
         "tree": _serialize_node(tree),
         "report": _serialize_report(report),
         "errors": [_serialize_error(e) for e in report.errors],

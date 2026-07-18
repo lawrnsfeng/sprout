@@ -1,4 +1,4 @@
-"""Type definitions for async tree traversal."""
+"""Type definitions for Sprout traversal."""
 
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 OnNodeError = Literal["skip_mark", "abort"]
 
 
-class Fetcher[Item](Protocol):
+class Fetcher[T](Protocol):
     """Protocol for fetching child items from a node.
 
     A fetcher is an async callable that takes a node reference and its depth,
@@ -22,13 +22,13 @@ class Fetcher[Item](Protocol):
         ref: "ChildRef",
         depth: int,
         /,
-    ) -> "FetchResult[Item]":
+    ) -> "FetchResult[T]":
         """Fetch children for the given node reference."""
         ...
 
 
 class ProgressHook(Protocol):
-    """Protocol for receiving progress events from AsyncTreeExecutor.
+    """Protocol for receiving progress events from Executor.
 
     Implementations track tree traversal progress. All methods are called
     synchronously from the executor event loop — keep them fast and

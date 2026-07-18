@@ -1,4 +1,4 @@
-"""Concurrency control for async tree traversal.
+"""Concurrency control for Sprout traversal.
 
 Implements concurrency limiting using:
 1. asyncio.Semaphore for capping concurrent in-flight operations

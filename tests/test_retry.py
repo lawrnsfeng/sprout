@@ -1,4 +1,4 @@
-"""Tests for asynctree retry module."""
+"""Tests for Sprout retry module."""
 
 import time
 

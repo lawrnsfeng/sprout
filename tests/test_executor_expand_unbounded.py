@@ -1,13 +1,13 @@
-"""Tests for asynctree executor unbounded expansion."""
+"""Tests for Sprout executor unbounded expansion."""
 
 import asyncio
 
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
 )
 
@@ -38,8 +38,8 @@ async def test_expand_unbounded_dynamic_clock_extends() -> None:
             )
         return FetchResult(items=[SampleItem(f"leaf-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(level_timeout=0.2, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(level_timeout=0.2, max_at_once=5)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_unbounded(ChildRef(id="node-0"))
 
@@ -60,8 +60,8 @@ async def test_expand_unbounded_timeout_partial_result() -> None:
             child_refs=[ChildRef(id=f"child-{depth}")],
         )
 
-    config = AsyncTreeExecutorConfig(level_timeout=0.2, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(level_timeout=0.2, max_at_once=5)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     tree, report = await executor.expand_unbounded(ChildRef(id="root"))
     assert report.timed_out is True
@@ -87,8 +87,8 @@ async def test_expand_unbounded_preserves_completed_nodes() -> None:
             )
         return FetchResult(items=[SampleItem(f"item-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(level_timeout=0.2, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(level_timeout=0.2, max_at_once=5)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     tree, _report = await executor.expand_unbounded(ChildRef(id="root"))
 
@@ -122,8 +122,8 @@ async def test_expand_unbounded_completes_without_timeout() -> None:
             )
         return FetchResult(items=[SampleItem(f"item-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(level_timeout=2.0, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(level_timeout=2.0, max_at_once=5)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_unbounded(ChildRef(id="root"))
 

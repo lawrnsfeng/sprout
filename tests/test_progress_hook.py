@@ -1,13 +1,13 @@
-"""Tests for ProgressHook protocol integration with AsyncTreeExecutor."""
+"""Tests for ProgressHook protocol integration with Executor."""
 
 import asyncio
 
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
     ProgressHook,
 )
@@ -73,14 +73,14 @@ def _make_executor(
     timeout: float = 5.0,
     retry_max: int = 1,
     on_node_error: OnNodeError = "skip_mark",
-) -> AsyncTreeExecutor[SampleItem]:
+) -> Executor[SampleItem]:
     """Build a configured executor with optional hook."""
-    cfg = AsyncTreeExecutorConfig(
+    cfg = ExecutorConfig(
         max_at_once=10,
         level_timeout=timeout,
         retry_max_attempts=retry_max,
     )
-    return AsyncTreeExecutor[SampleItem](
+    return Executor[SampleItem](
         fetcher=fetcher,
         config=cfg,
         on_node_error=on_node_error,

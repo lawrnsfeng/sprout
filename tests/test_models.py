@@ -1,4 +1,4 @@
-"""Tests for asynctree models."""
+"""Tests for Sprout models."""
 
 import dataclasses
 import json
@@ -92,7 +92,7 @@ def test_fetch_result_with_child_refs() -> None:
 
 
 def test_fetch_result_generic_parametrization() -> None:
-    """Test FetchResult works with different Item types."""
+    """Test FetchResult works with different T types."""
     result_files: FetchResult[FileItem] = FetchResult(
         items=[FileItem("a.txt", 100)],
     )

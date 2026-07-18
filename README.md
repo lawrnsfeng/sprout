@@ -22,7 +22,7 @@ make sync
 ## Usage
 
 ```python
-from sprout import AsyncTreeExecutor, AsyncTreeExecutorConfig
+from sprout import Executor, ExecutorConfig
 ```
 
 ## Development

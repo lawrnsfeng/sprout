@@ -1,4 +1,4 @@
-"""Async tree executor for recursive traversal."""
+"""Sprout executor for recursive traversal."""
 
 import asyncio
 import contextlib
@@ -8,8 +8,8 @@ from typing import Any
 
 from .clock import DynamicClock, GrandClock, StaticClock
 from .concurrency import ConcurrencyGate
-from .config import AsyncTreeExecutorConfig
-from .exceptions import AsyncTreeFetcherError, TraversalAbortedError
+from .config import ExecutorConfig
+from .exceptions import FetcherError, TraversalAbortedError
 from .models import (
     ChildRef,
     FetchResult,
@@ -22,7 +22,7 @@ from .types import Fetcher, OnNodeError, ProgressHook
 
 
 @dataclass
-class _SpawnContext[Item]:
+class _SpawnContext[T]:
     """Context bundle passed to child-spawning logic.
 
     Attributes:
@@ -36,12 +36,12 @@ class _SpawnContext[Item]:
 
     report: TraversalReport
     live_tasks: set[asyncio.Task[Any]]
-    node_map: dict[asyncio.Task[Any], "TreeNode[Item]"]
+    node_map: dict[asyncio.Task[Any], "TreeNode[T]"]
     max_depth: int | None
     clock: GrandClock
 
 
-class AsyncTreeExecutor[Item]:
+class Executor[T]:
     """Executor for async recursive tree traversal.
 
     Orchestrates recursive fetching with retry, concurrency control,
@@ -51,14 +51,14 @@ class AsyncTreeExecutor[Item]:
 
     def __init__(
         self,
-        fetcher: Fetcher[Item],
-        config: AsyncTreeExecutorConfig | None = None,
+        fetcher: Fetcher[T],
+        config: ExecutorConfig | None = None,
         *,
         on_node_error: OnNodeError = "skip_mark",
         retry_config: RetryConfig | None = None,
         progress_hook: ProgressHook | None = None,
     ) -> None:
-        """Initialize AsyncTreeExecutor.
+        """Initialize Executor.
 
         Args:
             fetcher: Async callable that fetches children for a node.
@@ -70,7 +70,7 @@ class AsyncTreeExecutor[Item]:
                 leaf completion.
 
         """
-        cfg = config or AsyncTreeExecutorConfig()
+        cfg = config or ExecutorConfig()
         self._fetcher = fetcher
         self._retry_config = retry_config or RetryConfig(
             max_attempts=cfg.retry_max_attempts,
@@ -86,7 +86,7 @@ class AsyncTreeExecutor[Item]:
         self,
         root_ref: ChildRef,
         depth: int,
-    ) -> tuple[TreeNode[Item], TraversalReport]:
+    ) -> tuple[TreeNode[T], TraversalReport]:
         """Expand tree with bounded depth using a static timeout.
 
         Args:
@@ -112,7 +112,7 @@ class AsyncTreeExecutor[Item]:
     async def expand_unbounded(
         self,
         root_ref: ChildRef,
-    ) -> tuple[TreeNode[Item], TraversalReport]:
+    ) -> tuple[TreeNode[T], TraversalReport]:
         """Expand tree with unbounded depth using a dynamic timeout.
 
         Args:
@@ -142,7 +142,7 @@ class AsyncTreeExecutor[Item]:
         root_ref: ChildRef,
         max_depth: int | None,
         clock: GrandClock,
-    ) -> tuple[TreeNode[Item], TraversalReport]:
+    ) -> tuple[TreeNode[T], TraversalReport]:
         """Core traversal loop.
 
         Args:
@@ -156,10 +156,10 @@ class AsyncTreeExecutor[Item]:
         """
         clock.start()
 
-        root_node: TreeNode[Item] = TreeNode(ref=root_ref, depth=0)
+        root_node: TreeNode[T] = TreeNode(ref=root_ref, depth=0)
         report = TraversalReport()
         live_tasks: set[asyncio.Task[Any]] = set()
-        node_map: dict[asyncio.Task[Any], TreeNode[Item]] = {}
+        node_map: dict[asyncio.Task[Any], TreeNode[T]] = {}
 
         self._parent_map[root_ref.id] = None
         self._seen_refs.add(root_ref.id)
@@ -167,7 +167,7 @@ class AsyncTreeExecutor[Item]:
         timeout_task = asyncio.create_task(clock.wait_for_timeout())
         live_tasks.add(timeout_task)
 
-        ctx: _SpawnContext[Item] = _SpawnContext(
+        ctx: _SpawnContext[T] = _SpawnContext(
             report=report,
             live_tasks=live_tasks,
             node_map=node_map,
@@ -200,7 +200,7 @@ class AsyncTreeExecutor[Item]:
                         fetch_result,
                         ctx,
                     )
-                except AsyncTreeFetcherError as fetcher_err:
+                except FetcherError as fetcher_err:
                     await self._handle_fetch_error(
                         node,
                         fetcher_err.original_error,
@@ -222,7 +222,7 @@ class AsyncTreeExecutor[Item]:
         self,
         report: TraversalReport,
         live_tasks: set[asyncio.Task[Any]],
-        node_map: dict[asyncio.Task[Any], "TreeNode[Item]"],
+        node_map: dict[asyncio.Task[Any], "TreeNode[T]"],
     ) -> None:
         """Cancel all live tasks on grand timeout and mark nodes."""
         report.timed_out = True
@@ -236,7 +236,7 @@ class AsyncTreeExecutor[Item]:
 
     def _handle_cancellation(
         self,
-        node: "TreeNode[Item]",
+        node: "TreeNode[T]",
         report: TraversalReport,
     ) -> None:
         """Mark a cancelled node as partial with error info."""
@@ -254,7 +254,7 @@ class AsyncTreeExecutor[Item]:
 
     async def _handle_fetch_error(
         self,
-        node: "TreeNode[Item]",
+        node: "TreeNode[T]",
         exc: Exception,
         report: TraversalReport,
         live_tasks: set[asyncio.Task[Any]],
@@ -292,9 +292,9 @@ class AsyncTreeExecutor[Item]:
 
     def _handle_success_and_spawn_children(
         self,
-        node: "TreeNode[Item]",
-        fetch_result: "FetchResult[Item]",
-        ctx: "_SpawnContext[Item]",
+        node: "TreeNode[T]",
+        fetch_result: "FetchResult[T]",
+        ctx: "_SpawnContext[T]",
     ) -> None:
         """Attach fetch result to node and spawn child tasks."""
         node.result = fetch_result
@@ -329,7 +329,7 @@ class AsyncTreeExecutor[Item]:
             self._seen_refs.add(child_ref.id)
             self._parent_map[child_ref.id] = parent_id
 
-            child_node: TreeNode[Item] = TreeNode(
+            child_node: TreeNode[T] = TreeNode(
                 ref=child_ref,
                 depth=child_depth,
             )
@@ -369,7 +369,7 @@ class AsyncTreeExecutor[Item]:
     def _handle_duplicate(
         self,
         child_ref: ChildRef,
-        parent_node: "TreeNode[Item]",
+        parent_node: "TreeNode[T]",
         report: TraversalReport,
     ) -> None:
         """Emit a warning NodeError for duplicate child ref and skip it."""
@@ -388,21 +388,21 @@ class AsyncTreeExecutor[Item]:
 
     def _create_fetch_task(
         self,
-        node: "TreeNode[Item]",
+        node: "TreeNode[T]",
         clock: GrandClock,
-    ) -> "asyncio.Task[FetchResult[Item]]":
+    ) -> "asyncio.Task[FetchResult[T]]":
         """Create a fetch task for a node."""
         return asyncio.create_task(self._fetch_with_retry(node, clock))
 
     async def _fetch_with_retry(
         self,
-        node: "TreeNode[Item]",
+        node: "TreeNode[T]",
         clock: GrandClock,
-    ) -> "FetchResult[Item]":
+    ) -> "FetchResult[T]":
         """Fetch a node with retry and concurrency control.
 
         Raises:
-            AsyncTreeFetcherError: If fetch fails after retries.
+            FetcherError: If fetch fails after retries.
             asyncio.CancelledError: If traversal is cancelled.
 
         """
@@ -416,13 +416,13 @@ class AsyncTreeExecutor[Item]:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise AsyncTreeFetcherError(node_id, exc) from exc
+            raise FetcherError(node_id, exc) from exc
 
     async def _fetch_once(
         self,
-        node: "TreeNode[Item]",
+        node: "TreeNode[T]",
         clock: GrandClock,
-    ) -> "FetchResult[Item]":
+    ) -> "FetchResult[T]":
         """Execute a single fetch attempt, checking cancellation first.
 
         Args:
@@ -444,7 +444,7 @@ class AsyncTreeExecutor[Item]:
         if clock.is_cancelled:
             raise asyncio.CancelledError
 
-    def _build_path(self, node: "TreeNode[Item]") -> list[str]:
+    def _build_path(self, node: "TreeNode[T]") -> list[str]:
         """Build full ancestor path from root to this node.
 
         Args:

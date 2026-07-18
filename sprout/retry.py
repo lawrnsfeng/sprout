@@ -1,4 +1,4 @@
-"""Retry configuration and utilities for async tree traversal.
+"""Retry configuration and utilities for Sprout traversal.
 
 Uses tenacity for retry orchestration but remains HTTP-client-agnostic.
 Callers provide their own RetryPredicate and optional RetryAfterHook.
@@ -59,7 +59,7 @@ class _HookedWait(wait_base):
         return self._base(retry_state)
 
 
-@dataclass
+@dataclass(frozen=True)
 class RetryConfig:
     """Configuration for retry behavior.
 

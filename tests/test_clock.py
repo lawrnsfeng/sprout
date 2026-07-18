@@ -1,4 +1,4 @@
-"""Tests for asynctree clock module."""
+"""Tests for Sprout clock module."""
 
 import asyncio
 

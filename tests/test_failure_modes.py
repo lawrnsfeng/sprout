@@ -1,4 +1,4 @@
-"""Tests for asynctree executor failure modes."""
+"""Tests for Sprout executor failure modes."""
 
 import asyncio
 import time
@@ -6,9 +6,9 @@ import time
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
     TraversalAbortedError,
 )
@@ -46,8 +46,8 @@ async def test_skip_mark_continues_siblings() -> None:
             )
         return FetchResult(items=[SampleItem(f"item-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(retry_max_attempts=1, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](
+    config = ExecutorConfig(retry_max_attempts=1, max_at_once=5)
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",
@@ -95,8 +95,8 @@ async def test_abort_cancels_all() -> None:
             )
         return FetchResult(items=[SampleItem(f"item-{ref.id}")])
 
-    config = AsyncTreeExecutorConfig(retry_max_attempts=1, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](
+    config = ExecutorConfig(retry_max_attempts=1, max_at_once=5)
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="abort",
@@ -129,12 +129,12 @@ async def test_concurrent_abort_cancels_within_bounded_time() -> None:
         await asyncio.sleep(10.0)
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(
+    config = ExecutorConfig(
         retry_max_attempts=1,
         max_at_once=10,
         level_timeout=30.0,
     )
-    executor = AsyncTreeExecutor[SampleItem](
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="abort",
@@ -166,8 +166,8 @@ async def test_error_has_traceback() -> None:
             outer()
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(retry_max_attempts=1, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](
+    config = ExecutorConfig(retry_max_attempts=1, max_at_once=5)
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",
@@ -193,8 +193,8 @@ async def test_error_has_full_path() -> None:
             raise RuntimeError(msg)
         return FetchResult(child_refs=[ChildRef(id=f"node-{depth + 1}")])
 
-    config = AsyncTreeExecutorConfig(retry_max_attempts=1, max_at_once=5)
-    executor = AsyncTreeExecutor[SampleItem](
+    config = ExecutorConfig(retry_max_attempts=1, max_at_once=5)
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",
@@ -223,11 +223,11 @@ async def test_retry_exhausted_recorded() -> None:
         msg = f"Attempt {attempts}"
         raise RuntimeError(msg)
 
-    config = AsyncTreeExecutorConfig(
+    config = ExecutorConfig(
         retry_max_attempts=_RETRY_ATTEMPTS,
         max_at_once=5,
     )
-    executor = AsyncTreeExecutor[SampleItem](
+    executor = Executor[SampleItem](
         fetcher=fetcher,
         config=config,
         on_node_error="skip_mark",

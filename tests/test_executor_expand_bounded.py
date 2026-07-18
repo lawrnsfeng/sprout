@@ -1,4 +1,4 @@
-"""Tests for asynctree executor bounded expansion."""
+"""Tests for Sprout executor bounded expansion."""
 
 import asyncio
 import time
@@ -6,9 +6,9 @@ import time
 import pytest
 
 from sprout import (
-    AsyncTreeExecutor,
-    AsyncTreeExecutorConfig,
     ChildRef,
+    Executor,
+    ExecutorConfig,
     FetchResult,
 )
 
@@ -47,8 +47,8 @@ async def test_expand_bounded_empty_tree() -> None:
             child_refs=[],
         )
 
-    config = AsyncTreeExecutorConfig(max_at_once=5, level_timeout=1.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=5, level_timeout=1.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     root_ref = ChildRef(id="root")
     tree, report = await executor.expand_bounded(root_ref, depth=3)
@@ -74,7 +74,7 @@ async def test_expand_bounded_single_level() -> None:
             )
         return FetchResult(items=[SampleItem(f"file-{ref.id}")])
 
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher)
+    executor = Executor[SampleItem](fetcher=fetcher)
     tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
     assert len(tree.children) == _SINGLE_LEVEL_CHILDREN
@@ -108,8 +108,8 @@ async def test_expand_bounded_asymmetric_tree() -> None:
             )
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(max_at_once=10, level_timeout=5.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=10, level_timeout=5.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     tree, report = await executor.expand_bounded(ChildRef(id="D1"), depth=5)
 
@@ -132,7 +132,7 @@ async def test_expand_bounded_depth_limit() -> None:
             child_refs=[ChildRef(id=f"node-d{depth + 1}")],
         )
 
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher)
+    executor = Executor[SampleItem](fetcher=fetcher)
     tree, report = await executor.expand_bounded(
         ChildRef(id="node-d0"),
         depth=3,
@@ -162,8 +162,8 @@ async def test_expand_bounded_wide_tree_concurrency() -> None:
             )
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(max_at_once=3, level_timeout=5.0)
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    config = ExecutorConfig(max_at_once=3, level_timeout=5.0)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
@@ -184,12 +184,12 @@ async def test_expand_bounded_rate_limit() -> None:
             )
         return FetchResult()
 
-    config = AsyncTreeExecutorConfig(
+    config = ExecutorConfig(
         max_at_once=10,
         max_per_second=5.0,
         level_timeout=5.0,
     )
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher, config=config)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
 
     _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
@@ -206,7 +206,7 @@ async def test_expand_bounded_invalid_depth() -> None:
         """Never called."""
         return FetchResult()
 
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher)
+    executor = Executor[SampleItem](fetcher=fetcher)
     with pytest.raises(ValueError, match="depth must be >= 1"):
         await executor.expand_bounded(ChildRef(id="root"), depth=0)
 
@@ -224,7 +224,7 @@ async def test_expand_bounded_zero_children_mid_tree() -> None:
             )
         return FetchResult(items=[SampleItem(f"leaf-item-{ref.id}")])
 
-    executor = AsyncTreeExecutor[SampleItem](fetcher=fetcher)
+    executor = Executor[SampleItem](fetcher=fetcher)
     tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=5)
 
     assert report.total_nodes == _ZERO_CHILDREN_NODES
