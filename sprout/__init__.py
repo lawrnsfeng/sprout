@@ -16,7 +16,6 @@ from .exceptions import (
     TraversalAbortedError,
 )
 from .executor import Executor
-from .graph_dump import dump_execution_graph
 from .models import (
     ChildRef,
     FetchResult,
@@ -52,5 +51,4 @@ __all__ = [
     "TraversalAbortedError",
     "TraversalReport",
     "TreeNode",
-    "dump_execution_graph",
 ]

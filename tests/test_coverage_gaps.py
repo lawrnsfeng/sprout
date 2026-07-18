@@ -14,7 +14,6 @@ from sprout import (
     FetchResult,
 )
 from sprout.clock import DynamicClock
-from sprout.graph_dump import _serialize_node, dump_execution_graph
 from sprout.models import TreeNode
 from sprout.retry import RetryConfig, _HookedWait
 
@@ -111,14 +110,14 @@ async def test_short_traceback_no_truncation() -> None:
     assert "truncated" not in tb
 
 
-def test_serialize_node_partial_status() -> None:
-    """Test serialization of a partial node (no error, but partial=True)."""
+def test_as_dict_partial_status() -> None:
+    """Test as_dict of a partial node (no error, but partial=True)."""
     node: TreeNode[SampleItem] = TreeNode(
         ref=ChildRef(id="partial-node"),
         partial=True,
         depth=1,
     )
-    result = _serialize_node(node)
+    result = node.as_dict
     assert result["status"] == "partial"
 
 
@@ -353,7 +352,7 @@ async def test_dump_after_timeout_execution(tmp_path: Path) -> None:
     tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
     output_path = tmp_path / "timeout_graph.json"
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
     assert data["report"]["timed_out"] is True

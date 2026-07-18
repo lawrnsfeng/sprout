@@ -1,6 +1,8 @@
 """Data models for Sprout traversal."""
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
 
 
@@ -63,27 +65,18 @@ class NodeError:
     traceback: str | None = None
     path: list[str] = field(default_factory=list)
 
-
-@dataclass
-class TreeNode[T]:
-    """A node in the fetched tree.
-
-    Attributes:
-        ref: Reference to this node (None for synthetic root).
-        result: Fetch result for this node (None if failed/cancelled).
-        children: List of child TreeNodes.
-        error: Error info if this node failed (None on success).
-        partial: True if this subtree was cancelled mid-traversal.
-        depth: Depth of this node in the tree (0 for root).
-
-    """
-
-    ref: ChildRef | None = None
-    result: "FetchResult[T] | None" = None
-    children: "list[TreeNode[T]]" = field(default_factory=list)
-    error: NodeError | None = None
-    partial: bool = False
-    depth: int = 0
+    @property
+    def as_dict(self) -> dict[str, object]:
+        """Return a dict representation of this error, suitable for JSON."""
+        return {
+            "node_id": self.node_id,
+            "kind": self.kind,
+            "attempts": self.attempts,
+            "last_exception_type": self.last_exception_type,
+            "last_exception_repr": self.last_exception_repr,
+            "traceback": self.traceback,
+            "path": self.path,
+        }
 
 
 @dataclass
@@ -110,3 +103,91 @@ class TraversalReport:
     elapsed_ms: int = 0
     timed_out: bool = False
     errors: list[NodeError] = field(default_factory=list)
+
+    @property
+    def as_dict(self) -> dict[str, object]:
+        """Return a dict representation of this report, suitable for JSON."""
+        return {
+            "total_nodes": self.total_nodes,
+            "failed_nodes": self.failed_nodes,
+            "cancelled_nodes": self.cancelled_nodes,
+            "skipped_nodes": self.skipped_nodes,
+            "max_depth_seen": self.max_depth_seen,
+            "elapsed_ms": self.elapsed_ms,
+            "timed_out": self.timed_out,
+        }
+
+
+@dataclass
+class TreeNode[T]:
+    """A node in the fetched tree.
+
+    Attributes:
+        ref: Reference to this node (None for synthetic root).
+        result: Fetch result for this node (None if failed/cancelled).
+        children: List of child TreeNodes.
+        error: Error info if this node failed (None on success).
+        partial: True if this subtree was cancelled mid-traversal.
+        depth: Depth of this node in the tree (0 for root).
+
+    """
+
+    ref: ChildRef | None = None
+    result: "FetchResult[T] | None" = None
+    children: "list[TreeNode[T]]" = field(default_factory=list)
+    error: NodeError | None = None
+    partial: bool = False
+    depth: int = 0
+
+    @property
+    def as_dict(self) -> dict[str, object]:
+        """Recursively return a dict representation of this subtree."""
+        status = "success"
+        if self.error is not None:
+            status = self.error.kind
+        elif self.partial:
+            status = "partial"
+        elif self.result is None:
+            status = "pending"
+
+        result: dict[str, object] = {
+            "node_id": self.ref.id if self.ref else "root",
+            "depth": self.depth,
+            "status": status,
+            "items_count": len(self.result.items) if self.result else 0,
+            "children": [child.as_dict for child in self.children],
+        }
+
+        if self.error is not None:
+            result["error"] = self.error.as_dict
+
+        return result
+
+    def dump_execution_graph(
+        self,
+        report: TraversalReport,
+        path: Path,
+    ) -> None:
+        """Dump this subtree's execution graph as JSON for debugging.
+
+        Produces a JSON file with:
+        - ``tree``: nested tree structure mirroring runtime hierarchy
+        - ``report``: summary statistics
+        - ``errors``: flat array of all errors for quick scanning
+
+        Args:
+            report: TraversalReport from the traversal.
+            path: File path to write the JSON output to.
+
+        """
+        output: dict[str, object] = {
+            "tree": self.as_dict,
+            "report": report.as_dict,
+            "errors": [e.as_dict for e in report.errors],
+        }
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(output, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )

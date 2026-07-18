@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from sprout import Executor, ExecutorConfig
-from sprout.graph_dump import dump_execution_graph
 from sprout.models import (
     ChildRef,
     FetchResult,
@@ -76,7 +75,7 @@ def test_dump_execution_graph_creates_file(tmp_path: Path) -> None:
     tree, report = _build_sample_tree()
     output_path = tmp_path / "debug" / "graph.json"
 
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     assert output_path.exists()
     data = json.loads(output_path.read_text(encoding="utf-8"))
@@ -90,7 +89,7 @@ def test_dump_execution_graph_tree_structure(tmp_path: Path) -> None:
     tree, report = _build_sample_tree()
     output_path = tmp_path / "graph.json"
 
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
     tree_data = data["tree"]
@@ -115,7 +114,7 @@ def test_dump_execution_graph_report_fields(tmp_path: Path) -> None:
     tree, report = _build_sample_tree()
     output_path = tmp_path / "graph.json"
 
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
     r = data["report"]
@@ -131,7 +130,7 @@ def test_dump_execution_graph_errors_flat_array(tmp_path: Path) -> None:
     tree, report = _build_sample_tree()
     output_path = tmp_path / "graph.json"
 
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
     errors = data["errors"]
@@ -146,7 +145,7 @@ def test_dump_execution_graph_roundtrip(tmp_path: Path) -> None:
     tree, report = _build_sample_tree()
     output_path = tmp_path / "graph.json"
 
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     raw = output_path.read_text(encoding="utf-8")
     data = json.loads(raw)
@@ -177,7 +176,7 @@ async def test_dump_after_real_execution(tmp_path: Path) -> None:
     )
 
     output_path = tmp_path / "real_graph.json"
-    dump_execution_graph(tree_result, report_result, output_path)
+    tree_result.dump_execution_graph(report_result, output_path)
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
     assert data["report"]["total_nodes"] == _REAL_TREE_TOTAL
@@ -190,7 +189,7 @@ def test_dump_empty_tree(tmp_path: Path) -> None:
     report = TraversalReport()
     output_path = tmp_path / "empty.json"
 
-    dump_execution_graph(tree, report, output_path)
+    tree.dump_execution_graph(report, output_path)
 
     data = json.loads(output_path.read_text(encoding="utf-8"))
     assert data["tree"]["status"] == "pending"
