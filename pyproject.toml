@@ -79,11 +79,3 @@ warn_unused_ignores = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-
-[tool.pdm.scripts]
-lint = "ruff check --fix"
-tc = "mypy ."
-pre = "pre-commit run --all-files"
-test = "python -m pytest tests"
-testv = "python -m pytest -s tests"
-cov = "python -m pytest --cov=sprout --cov-report=term-missing tests"

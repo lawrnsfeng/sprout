@@ -28,12 +28,11 @@ from sprout import Executor, ExecutorConfig
 ## Development
 
 ```bash
-uv run pytest
-uv run pytest --cov=sprout --cov-report=term-missing
-uv run ruff check
-uv run ruff format --check
-uv run ty check
-pre-commit run --all-files
+make test
+make cov
+make lint
+make tc
+make pre
 ```
 
 Coding standards live in `.claude/rules/`.

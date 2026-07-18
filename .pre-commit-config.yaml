@@ -63,3 +63,11 @@ repos:
           - python
         pass_filenames: false
         always_run: true
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types:
+          - python
+        pass_filenames: false
+        always_run: true
