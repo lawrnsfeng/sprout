@@ -22,6 +22,8 @@ repos:
           - yaml
         args:
           - --strict
+          - -d
+          - '{extends: default, rules: {truthy: {check-keys: false}}}'
   - repo: https://github.com/lyz-code/yamlfix.git
     rev: 1.19.0
     hooks:

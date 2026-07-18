@@ -32,6 +32,11 @@ class GrandClock(ABC):
         """Whether the clock has been cancelled."""
         return self._cancelled
 
+    def check_cancelled(self) -> None:
+        """Raise CancelledError if this clock has been cancelled."""
+        if self.is_cancelled:
+            raise asyncio.CancelledError
+
     @property
     def elapsed_ms(self) -> int:
         """Elapsed time in milliseconds since start."""

@@ -1,6 +1,6 @@
 [project]
 name = "sprout"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Async recursive tree traversal framework with retry, concurrency gating, and timeout policies."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -45,7 +45,7 @@ packages = ["sprout"]
 only-include = ["sprout"]
 
 [tool.ruff]
-line-length = 79
+line-length = 99
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -79,3 +79,32 @@ warn_unused_ignores = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.semantic_release]
+commit_parser = "conventional"
+tag_format = "v{version}"
+major_on_zero = true
+allow_zero_version = true
+commit_message = "chore(release): v{version}\n\n[skip ci]"
+commit_author = "github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+
+[tool.semantic_release.commit_parser_options]
+parse_squash_commits = true
+ignore_merge_commits = true
+
+[tool.semantic_release.branches.main]
+match = "master"
+prerelease = false
+
+[tool.semantic_release.remote]
+type = "github"
+token = { env = "GH_TOKEN" }
+
+[tool.semantic_release.publish]
+upload_to_vcs_release = true
+
+[tool.semantic_release.changelog]
+mode = "update"
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"

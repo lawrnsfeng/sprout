@@ -8,6 +8,13 @@ This package is standalone — it has zero dependencies on any other
 first-party package.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("sprout")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
+
 from .config import ExecutorConfig, SproutSettings
 from .exceptions import (
     FetcherError,
@@ -53,4 +60,5 @@ __all__ = [
     "TraversalAbortedError",
     "TraversalReport",
     "TreeNode",
+    "__version__",
 ]

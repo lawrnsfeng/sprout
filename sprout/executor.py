@@ -17,12 +17,28 @@ from .exceptions import (
 from .models import (
     ChildRef,
     FetchResult,
-    NodeError,
     TraversalReport,
     TreeNode,
 )
 from .retry import RetryConfig
 from .typedefs import Fetcher, OnNodeError, ProgressHook
+
+
+def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
+    """Extract and truncate exception traceback.
+
+    Args:
+        exc: Exception to extract traceback from.
+        max_lines: Maximum lines to keep.
+
+    Returns:
+        Truncated traceback string.
+
+    """
+    tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    if len(tb_lines) <= max_lines:
+        return "".join(tb_lines)
+    return "".join(tb_lines[:max_lines]) + "\n... (truncated)"
 
 
 @dataclass
@@ -182,9 +198,7 @@ class Executor[T]:
         node_map[root_task] = root_node
 
         while live_tasks:
-            wait_set: set[
-                asyncio.Task[FetchResult[T]] | asyncio.Task[None]
-            ] = {
+            wait_set: set[asyncio.Task[FetchResult[T]] | asyncio.Task[None]] = {
                 timeout_task,
                 *live_tasks,
             }
@@ -242,26 +256,8 @@ class Executor[T]:
         await asyncio.gather(*live_tasks, return_exceptions=True)
         for task in list(live_tasks):
             node = node_map.pop(task)
-            self._handle_cancellation(node, report)
+            node.mark_cancelled(report, path=self._build_path(node))
         live_tasks.clear()
-
-    def _handle_cancellation(
-        self,
-        node: "TreeNode[T]",
-        report: TraversalReport,
-    ) -> None:
-        """Mark a cancelled node as partial with error info."""
-        node.partial = True
-        node.error = NodeError(
-            kind="cancelled",
-            attempts=0,
-            last_exception_type="CancelledError",
-            last_exception_repr="Task cancelled",
-            node_id=node.ref.id if node.ref else "root",
-            path=self._build_path(node),
-        )
-        report.cancelled_nodes += 1
-        report.errors.append(node.error)
 
     async def _handle_fetch_error(
         self,
@@ -276,19 +272,13 @@ class Executor[T]:
             TraversalAbortedError: If on_node_error="abort".
 
         """
-        node_id = node.ref.id if node.ref else "root"
-        node_error = NodeError(
-            kind="fetch_failed",
+        node_error = node.mark_failed(
+            exc,
+            report,
             attempts=self._retry_config.max_attempts,
-            last_exception_type=type(exc).__name__,
-            last_exception_repr=repr(exc),
-            traceback=self._truncate_traceback(exc),
-            node_id=node_id,
+            traceback=_truncate_traceback(exc),
             path=self._build_path(node),
         )
-        node.error = node_error
-        report.failed_nodes += 1
-        report.errors.append(node_error)
 
         if self._on_node_error == "abort":
             for task in live_tasks:
@@ -296,8 +286,8 @@ class Executor[T]:
             await asyncio.gather(*live_tasks, return_exceptions=True)
             live_tasks.clear()
             raise TraversalAbortedError(
-                message=f"Traversal aborted due to error at node {node_id}",
-                node_id=node_id,
+                message=(f"Traversal aborted due to error at node {node_error.node_id}"),
+                node_id=node_error.node_id,
                 original_error=exc,
             ) from exc
 
@@ -308,12 +298,7 @@ class Executor[T]:
         ctx: "_SpawnContext[T]",
     ) -> None:
         """Attach fetch result to node and spawn child tasks."""
-        node.result = fetch_result
-        ctx.report.total_nodes += 1
-        ctx.report.max_depth_seen = max(
-            ctx.report.max_depth_seen,
-            node.depth,
-        )
+        node.mark_fetched(fetch_result, ctx.report)
 
         if isinstance(ctx.clock, DynamicClock):
             task = asyncio.create_task(ctx.clock.notify_depth(node.depth))
@@ -335,16 +320,16 @@ class Executor[T]:
         spawned_ids: list[str] = []
         for child_ref in fetch_result.child_refs:
             if child_ref.id in self._seen_refs:
-                self._handle_duplicate(child_ref, node, ctx.report)
+                node.record_duplicate_child(
+                    child_ref,
+                    ctx.report,
+                    path=self._build_path(node),
+                )
                 continue
             self._seen_refs.add(child_ref.id)
             self._parent_map[child_ref.id] = parent_id
 
-            child_node: TreeNode[T] = TreeNode(
-                ref=child_ref,
-                depth=child_depth,
-            )
-            node.children.append(child_node)
+            child_node = node.spawn_child(child_ref)
 
             child_task = self._create_fetch_task(child_node, ctx.clock)
             ctx.live_tasks.add(child_task)
@@ -377,26 +362,6 @@ class Executor[T]:
         with contextlib.suppress(Exception):
             self._progress_hook.on_node_complete(node_id)
 
-    def _handle_duplicate(
-        self,
-        child_ref: ChildRef,
-        parent_node: "TreeNode[T]",
-        report: TraversalReport,
-    ) -> None:
-        """Emit a warning NodeError for duplicate child ref and skip it."""
-        node_error = NodeError(
-            kind="duplicate_skipped",
-            attempts=0,
-            last_exception_type="DuplicateRef",
-            last_exception_repr=(
-                f"Ref '{child_ref.id}' already seen, skipped"
-            ),
-            node_id=child_ref.id,
-            path=[*self._build_path(parent_node), child_ref.id],
-        )
-        report.skipped_nodes += 1
-        report.errors.append(node_error)
-
     def _create_fetch_task(
         self,
         node: "TreeNode[T]",
@@ -421,7 +386,7 @@ class Executor[T]:
 
         try:
             async with self._gate.acquire():
-                self._check_cancelled(clock)
+                clock.check_cancelled()
                 retrying = self._retry_config.as_retrying()
                 return await retrying(self._fetch_once, node, clock)
         except asyncio.CancelledError:
@@ -444,16 +409,11 @@ class Executor[T]:
             Fetch result from the user-provided fetcher.
 
         """
-        self._check_cancelled(clock)
+        clock.check_cancelled()
         return await self._fetcher(
             node.ref or ChildRef(id="root"),
             node.depth,
         )
-
-    def _check_cancelled(self, clock: GrandClock) -> None:
-        """Raise CancelledError if the grand clock has fired."""
-        if clock.is_cancelled:
-            raise asyncio.CancelledError
 
     def _build_path(self, node: "TreeNode[T]") -> list[str]:
         """Build full ancestor path from root to this node.
@@ -471,28 +431,3 @@ class Executor[T]:
             path.insert(0, node_id)
             node_id = self._parent_map.get(node_id)
         return path
-
-    def _truncate_traceback(
-        self,
-        exc: Exception,
-        *,
-        max_lines: int = 20,
-    ) -> str:
-        """Extract and truncate exception traceback.
-
-        Args:
-            exc: Exception to extract traceback from.
-            max_lines: Maximum lines to keep.
-
-        Returns:
-            Truncated traceback string.
-
-        """
-        tb_lines = traceback.format_exception(
-            type(exc),
-            exc,
-            exc.__traceback__,
-        )
-        if len(tb_lines) <= max_lines:
-            return "".join(tb_lines)
-        return "".join(tb_lines[:max_lines]) + "\n... (truncated)"

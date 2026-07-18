@@ -139,6 +139,84 @@ class TreeNode[T]:
     partial: bool = False
     depth: int = 0
 
+    def mark_fetched(
+        self,
+        fetch_result: "FetchResult[T]",
+        report: TraversalReport,
+    ) -> None:
+        """Attach a fetch result to this node and update report stats."""
+        self.result = fetch_result
+        report.total_nodes += 1
+        report.max_depth_seen = max(report.max_depth_seen, self.depth)
+
+    def spawn_child(self, ref: ChildRef) -> "TreeNode[T]":
+        """Create a child node at this node's depth + 1 and attach it."""
+        child: TreeNode[T] = TreeNode(ref=ref, depth=self.depth + 1)
+        self.children.append(child)
+        return child
+
+    def mark_cancelled(
+        self,
+        report: TraversalReport,
+        *,
+        path: list[str],
+    ) -> None:
+        """Mark this node as partially cancelled and record it on report."""
+        self.partial = True
+        self.error = NodeError(
+            kind="cancelled",
+            attempts=0,
+            last_exception_type="CancelledError",
+            last_exception_repr="Task cancelled",
+            node_id=self.ref.id if self.ref else "root",
+            path=path,
+        )
+        report.cancelled_nodes += 1
+        report.errors.append(self.error)
+
+    def mark_failed(
+        self,
+        exc: Exception,
+        report: TraversalReport,
+        *,
+        attempts: int,
+        traceback: str | None,
+        path: list[str],
+    ) -> NodeError:
+        """Attach failure info to this node and record it on the report."""
+        node_error = NodeError(
+            kind="fetch_failed",
+            attempts=attempts,
+            last_exception_type=type(exc).__name__,
+            last_exception_repr=repr(exc),
+            traceback=traceback,
+            node_id=self.ref.id if self.ref else "root",
+            path=path,
+        )
+        self.error = node_error
+        report.failed_nodes += 1
+        report.errors.append(node_error)
+        return node_error
+
+    def record_duplicate_child(
+        self,
+        child_ref: ChildRef,
+        report: TraversalReport,
+        *,
+        path: list[str],
+    ) -> None:
+        """Record a skipped duplicate child ref against this parent node."""
+        node_error = NodeError(
+            kind="duplicate_skipped",
+            attempts=0,
+            last_exception_type="DuplicateRef",
+            last_exception_repr=(f"Ref '{child_ref.id}' already seen, skipped"),
+            node_id=child_ref.id,
+            path=[*path, child_ref.id],
+        )
+        report.skipped_nodes += 1
+        report.errors.append(node_error)
+
     @property
     def as_dict(self) -> dict[str, object]:
         """Recursively return a dict representation of this subtree."""

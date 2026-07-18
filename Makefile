@@ -27,3 +27,10 @@ testv:
 .PHONY: cov
 cov:
 	@uv run python -m pytest --cov=sprout --cov-report=term-missing tests
+
+.PHONY: check
+check: lint tc test
+
+.PHONY: next-version
+next-version:
+	@uvx --from python-semantic-release semantic-release --noop version --print
