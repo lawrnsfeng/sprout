@@ -9,6 +9,29 @@ class GrandTimeoutExceededError(SproutError):
     """Raised when grand timeout is exceeded during traversal."""
 
 
+class InvalidParameterError(SproutError, ValueError):
+    """Raised when a constructor or method argument fails validation.
+
+    Attributes:
+        param: Name of the invalid parameter.
+        requirement: Human-readable description of the required constraint.
+
+    """
+
+    def __init__(self, *, param: str, requirement: str) -> None:
+        """Initialize with the invalid parameter name and its requirement.
+
+        Args:
+            param: Name of the invalid parameter.
+            requirement: Human-readable description of the required
+                constraint (e.g. "> 0").
+
+        """
+        super().__init__(f"{param} must be {requirement}")
+        self.param = param
+        self.requirement = requirement
+
+
 class FetcherError(SproutError):
     """Raised when a user-provided fetcher fails after retries.
 

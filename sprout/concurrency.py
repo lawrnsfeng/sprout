@@ -13,6 +13,8 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+from .exceptions import InvalidParameterError
+
 
 class ConcurrencyGate:
     """Controls concurrency via semaphore and rate limiting.
@@ -35,15 +37,16 @@ class ConcurrencyGate:
             max_per_second: Maximum operations per second (0 = unlimited).
 
         Raises:
-            ValueError: If max_at_once <= 0 or max_per_second < 0.
+            InvalidParameterError: If max_at_once <= 0 or max_per_second < 0.
 
         """
         if max_at_once <= 0:
-            msg = "max_at_once must be > 0"
-            raise ValueError(msg)
+            raise InvalidParameterError(param="max_at_once", requirement="> 0")
         if max_per_second < 0:
-            msg = "max_per_second must be >= 0"
-            raise ValueError(msg)
+            raise InvalidParameterError(
+                param="max_per_second",
+                requirement=">= 0",
+            )
 
         self._semaphore = asyncio.Semaphore(max_at_once)
         self._max_per_second = max_per_second

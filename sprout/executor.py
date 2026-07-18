@@ -9,7 +9,11 @@ from typing import cast
 from .clock import DynamicClock, GrandClock, StaticClock
 from .concurrency import ConcurrencyGate
 from .config import ExecutorConfig
-from .exceptions import FetcherError, TraversalAbortedError
+from .exceptions import (
+    FetcherError,
+    InvalidParameterError,
+    TraversalAbortedError,
+)
 from .models import (
     ChildRef,
     FetchResult,
@@ -97,13 +101,12 @@ class Executor[T]:
             Tuple of (root TreeNode, TraversalReport).
 
         Raises:
-            ValueError: If depth < 1.
+            InvalidParameterError: If depth < 1.
             TraversalAbortedError: If on_node_error="abort" and a node fails.
 
         """
         if depth < 1:
-            msg = "depth must be >= 1"
-            raise ValueError(msg)
+            raise InvalidParameterError(param="depth", requirement=">= 1")
 
         self._reset_state()
         clock = StaticClock(depth * self._level_timeout)

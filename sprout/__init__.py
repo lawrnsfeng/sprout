@@ -12,6 +12,7 @@ from .config import ExecutorConfig, SproutSettings
 from .exceptions import (
     FetcherError,
     GrandTimeoutExceededError,
+    InvalidParameterError,
     SproutError,
     TraversalAbortedError,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "Fetcher",
     "FetcherError",
     "GrandTimeoutExceededError",
+    "InvalidParameterError",
     "NodeError",
     "OnNodeError",
     "ProgressHook",

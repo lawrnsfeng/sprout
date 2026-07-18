@@ -4,6 +4,8 @@ import asyncio
 import time
 from abc import ABC, abstractmethod
 
+from .exceptions import InvalidParameterError
+
 
 class GrandClock(ABC):
     """Abstract base for grand timeout clocks.
@@ -59,12 +61,14 @@ class StaticClock(GrandClock):
             total_seconds: Total timeout budget (must be > 0).
 
         Raises:
-            ValueError: If total_seconds <= 0.
+            InvalidParameterError: If total_seconds <= 0.
 
         """
         if total_seconds <= 0:
-            msg = "total_seconds must be > 0"
-            raise ValueError(msg)
+            raise InvalidParameterError(
+                param="total_seconds",
+                requirement="> 0",
+            )
         super().__init__()
         self._total_seconds = total_seconds
 
@@ -100,15 +104,20 @@ class DynamicClock(GrandClock):
             per_level_seconds: Budget added per new depth level (>= 0).
 
         Raises:
-            ValueError: If base_seconds <= 0 or per_level_seconds < 0.
+            InvalidParameterError: If base_seconds <= 0 or
+                per_level_seconds < 0.
 
         """
         if base_seconds <= 0:
-            msg = "base_seconds must be > 0"
-            raise ValueError(msg)
+            raise InvalidParameterError(
+                param="base_seconds",
+                requirement="> 0",
+            )
         if per_level_seconds < 0:
-            msg = "per_level_seconds must be >= 0"
-            raise ValueError(msg)
+            raise InvalidParameterError(
+                param="per_level_seconds",
+                requirement=">= 0",
+            )
         super().__init__()
         self._base_seconds = base_seconds
         self._per_level_seconds = per_level_seconds
