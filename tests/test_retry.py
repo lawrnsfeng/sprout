@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from sprout.retry import RetryConfig, _always_retry, build_retrying
+from sprout.retry import RetryConfig, _always_retry
 
 _DEFAULT_MAX_ATTEMPTS = 4
 _DEFAULT_MIN_WAIT = 0.5
@@ -50,10 +50,10 @@ def test_retry_config_custom_values() -> None:
     assert config.is_retryable is custom_pred
 
 
-def test_build_retrying_creates_instance() -> None:
-    """Test build_retrying returns an AsyncRetrying object."""
+def test_as_retrying_creates_instance() -> None:
+    """Test as_retrying returns an AsyncRetrying object."""
     config = RetryConfig(max_attempts=_CUSTOM_MAX_ATTEMPTS)
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
     assert retrying is not None
 
 
@@ -65,7 +65,7 @@ async def test_retry_succeeds_on_second_attempt() -> None:
         min_wait=0.01,
         max_wait=0.02,
     )
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
     call_count = 0
 
     async def flaky() -> str:
@@ -93,7 +93,7 @@ async def test_retry_exhausted_raises() -> None:
         min_wait=0.01,
         max_wait=0.02,
     )
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
 
     async def always_fails() -> str:
         msg = "always"
@@ -120,7 +120,7 @@ async def test_retry_non_retryable_fails_immediately() -> None:
         min_wait=0.01,
         is_retryable=only_runtime,
     )
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
     call_count = 0
 
     async def raises_value_error() -> str:
@@ -149,7 +149,7 @@ async def test_retry_jitter_bounds() -> None:
         max_wait=0.5,
         jitter_pct=_DEFAULT_JITTER,
     )
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
     timestamps: list[float] = []
 
     async def always_fails() -> None:
@@ -185,7 +185,7 @@ async def test_retry_with_retry_after_hook() -> None:
         min_wait=0.01,
         retry_after_hook=hook,
     )
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
     call_count = 0
 
     async def flaky() -> str:

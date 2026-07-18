@@ -12,7 +12,7 @@ from sprout import (
     ProgressHook,
 )
 from sprout.exceptions import TraversalAbortedError
-from sprout.types import Fetcher, OnNodeError
+from sprout.typedefs import Fetcher, OnNodeError
 
 _FAST_TIMEOUT = 0.3
 

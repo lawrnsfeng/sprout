@@ -17,8 +17,8 @@ from .models import (
     TraversalReport,
     TreeNode,
 )
-from .retry import RetryConfig, build_retrying
-from .types import Fetcher, OnNodeError, ProgressHook
+from .retry import RetryConfig
+from .typedefs import Fetcher, OnNodeError, ProgressHook
 
 
 @dataclass
@@ -419,7 +419,7 @@ class Executor[T]:
         try:
             async with self._gate.acquire():
                 self._check_cancelled(clock)
-                retrying = build_retrying(self._retry_config)
+                retrying = self._retry_config.as_retrying()
                 return await retrying(self._fetch_once, node, clock)
         except asyncio.CancelledError:
             raise

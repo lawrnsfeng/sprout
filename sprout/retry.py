@@ -15,7 +15,7 @@ from tenacity import (
 )
 from tenacity.wait import wait_base
 
-from .types import RetryAfterHook, RetryPredicate
+from .typedefs import RetryAfterHook, RetryPredicate
 
 
 def _always_retry(_exc: BaseException) -> bool:
@@ -29,12 +29,13 @@ class _HookedWait(wait_base):
     Falls back to exponential jitter when the hook returns no override.
     """
 
-    def __init__(self, base: wait_base, hook: RetryAfterHook) -> None:
-        """Initialise with a base wait strategy and a retry-after hook.
+    def __init__(self, base: wait_base, hook: RetryAfterHook | None) -> None:
+        """Initialise with a base wait strategy and an optional hook.
 
         Args:
             base: Fallback wait strategy (e.g. wait_exponential_jitter).
             hook: Caller-provided hook extracting wait seconds from exceptions.
+                When None, the base strategy is always used.
 
         """
         self._base = base
@@ -50,7 +51,7 @@ class _HookedWait(wait_base):
             Seconds to wait before the next attempt.
 
         """
-        if retry_state.outcome is not None:
+        if self._hook is not None and retry_state.outcome is not None:
             exc = retry_state.outcome.exception()
             if exc is not None:
                 wait_secs = self._hook(exc)
@@ -83,30 +84,22 @@ class RetryConfig:
     )
     retry_after_hook: RetryAfterHook | None = None
 
+    def as_retrying(self) -> AsyncRetrying:
+        """Build a tenacity AsyncRetrying instance from this config.
 
-def build_retrying(config: RetryConfig) -> AsyncRetrying:
-    """Build a tenacity AsyncRetrying instance from config.
+        Returns:
+            Configured AsyncRetrying instance ready for iteration.
 
-    Args:
-        config: Retry configuration.
-
-    Returns:
-        Configured AsyncRetrying instance ready for iteration.
-
-    """
-    base_wait: wait_base = wait_exponential_jitter(
-        initial=config.min_wait,
-        max=config.max_wait,
-        jitter=config.jitter_pct,
-    )
-    wait: wait_base = (
-        _HookedWait(base_wait, config.retry_after_hook)
-        if config.retry_after_hook is not None
-        else base_wait
-    )
-    return AsyncRetrying(
-        stop=stop_after_attempt(config.max_attempts),
-        wait=wait,
-        retry=retry_if_exception(config.is_retryable),
-        reraise=True,
-    )
+        """
+        base_wait: wait_base = wait_exponential_jitter(
+            initial=self.min_wait,
+            max=self.max_wait,
+            jitter=self.jitter_pct,
+        )
+        wait = _HookedWait(base_wait, self.retry_after_hook)
+        return AsyncRetrying(
+            stop=stop_after_attempt(self.max_attempts),
+            wait=wait,
+            retry=retry_if_exception(self.is_retryable),
+            reraise=True,
+        )

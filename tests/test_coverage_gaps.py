@@ -16,7 +16,7 @@ from sprout import (
 from sprout.clock import DynamicClock
 from sprout.graph_dump import _serialize_node, dump_execution_graph
 from sprout.models import TreeNode
-from sprout.retry import RetryConfig, _HookedWait, build_retrying
+from sprout.retry import RetryConfig, _HookedWait
 
 _FLAKY_SUCCEED_ON = 3
 _RETRY_MIN_WAIT = 0.01
@@ -137,7 +137,7 @@ async def test_retry_after_hook_called() -> None:
         max_wait=0.02,
         retry_after_hook=hook,
     )
-    retrying = build_retrying(config)
+    retrying = config.as_retrying()
     call_count = 0
 
     async def flaky() -> str:

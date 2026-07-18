@@ -25,7 +25,7 @@ from .models import (
     TreeNode,
 )
 from .retry import RetryConfig
-from .types import (
+from .typedefs import (
     Fetcher,
     OnNodeError,
     ProgressHook,
