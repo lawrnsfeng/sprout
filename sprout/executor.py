@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -43,6 +44,32 @@ def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
     if len(tb_lines) <= max_lines:
         return "".join(tb_lines)
     return "... (truncated)\n" + "".join(tb_lines[-max_lines:])
+
+
+def blocking_fetcher[T](
+    fetch: Callable[[ChildRef, int], FetchResult[T]],
+) -> Fetcher[T]:
+    """Adapt a blocking fetch function to the async ``Fetcher`` protocol.
+
+    Each call runs in a worker thread, so a fetcher built on a blocking
+    client can be used unchanged. A blocking call cannot be interrupted: on
+    a timeout the traversal moves on, but the thread runs until the call
+    returns, so give the underlying client its own timeout.
+
+    Args:
+        fetch: Blocking function taking a node reference and its depth.
+
+    Returns:
+        Async fetcher that runs ``fetch`` in a worker thread.
+
+    """
+
+    async def fetcher(ref: ChildRef, depth: int, /) -> FetchResult[T]:
+        # ponytail: the loop's default thread pool caps real concurrency at
+        # its own size; give the loop a larger pool if max_at_once exceeds it.
+        return await asyncio.to_thread(fetch, ref, depth)
+
+    return fetcher
 
 
 @dataclass
@@ -105,7 +132,8 @@ class Executor[T]:
         self._retry_config = retry_config or RetryConfig(
             max_attempts=cfg.retry_max_attempts,
         )
-        self._gate = ConcurrencyGate(cfg.max_at_once, cfg.max_per_second)
+        self._gate_limits = (cfg.max_at_once, cfg.max_per_second)
+        self._gate = ConcurrencyGate(*self._gate_limits)
         self._level_timeout = cfg.level_timeout
         self._node_timeout = cfg.node_timeout
         self._on_node_error = on_node_error
@@ -162,8 +190,39 @@ class Executor[T]:
         )
         return await self._execute(root_ref, None, clock)
 
+    def run_sync(
+        self,
+        root_ref: ChildRef,
+        depth: int | None = None,
+    ) -> tuple[TreeNode[T], TraversalReport]:
+        """Run a traversal to completion from synchronous code.
+
+        Starts its own event loop, so it cannot be called from inside a
+        running one; await ``expand_bounded``/``expand_unbounded`` there.
+
+        Args:
+            root_ref: Reference to the root node.
+            depth: Maximum depth to traverse (None = unbounded).
+
+        Returns:
+            Tuple of (root TreeNode, TraversalReport).
+
+        Raises:
+            InvalidParameterError: If depth < 1.
+            TraversalAbortedError: If on_node_error="abort" and a node fails.
+
+        """
+        if depth is None:
+            return asyncio.run(self.expand_unbounded(root_ref))
+        return asyncio.run(self.expand_bounded(root_ref, depth))
+
     def _reset_state(self) -> None:
-        """Reset per-run mutable state."""
+        """Reset per-run mutable state.
+
+        The gate is rebuilt because asyncio primitives stay bound to the
+        event loop they first waited on, and each ``run_sync`` has its own.
+        """
+        self._gate = ConcurrencyGate(*self._gate_limits)
         self._seen_refs = set()
 
     async def _execute(
