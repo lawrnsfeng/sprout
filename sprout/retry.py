@@ -69,7 +69,8 @@ class RetryConfig:
         max_attempts: Maximum number of retry attempts.
         min_wait: Minimum wait between retries in seconds.
         max_wait: Maximum wait between retries in seconds.
-        jitter_pct: Jitter percentage for exponential backoff (±).
+        jitter_pct: Maximum random jitter added to each wait, in seconds
+            (not a percentage, despite the name).
         is_retryable: Predicate determining if an exception is retryable.
         retry_after_hook: Optional hook extracting wait duration
             from exceptions.
@@ -93,7 +94,7 @@ class RetryConfig:
 
         """
         base_wait: wait_base = wait_exponential_jitter(
-            initial=self.min_wait,
+            multiplier=self.min_wait,
             max=self.max_wait,
             jitter=self.jitter_pct,
         )

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+import warnings
 
 import pytest
 
@@ -56,6 +57,13 @@ def test_as_retrying_creates_instance() -> None:
     config = RetryConfig(max_attempts=_CUSTOM_MAX_ATTEMPTS)
     retrying = config.as_retrying()
     assert retrying is not None
+
+
+def test_as_retrying_emits_no_warnings() -> None:
+    """Test building the retry strategy uses no deprecated tenacity API."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        RetryConfig().as_retrying()
 
 
 @pytest.mark.asyncio

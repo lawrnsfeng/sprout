@@ -333,6 +333,7 @@ async def test_long_traceback_is_truncated() -> None:
     tb = report.errors[0].traceback
     assert tb is not None
     assert "truncated" in tb
+    assert tb.rstrip().endswith("RuntimeError: deep")
 
 
 @pytest.mark.asyncio

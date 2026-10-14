@@ -25,7 +25,9 @@ from .typedefs import Fetcher, OnNodeError, ProgressHook
 
 
 def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
-    """Extract and truncate exception traceback.
+    """Extract and truncate exception traceback, keeping its tail.
+
+    The tail holds the innermost frames and the exception line itself.
 
     Args:
         exc: Exception to extract traceback from.
@@ -38,7 +40,7 @@ def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
     if len(tb_lines) <= max_lines:
         return "".join(tb_lines)
-    return "".join(tb_lines[:max_lines]) + "\n... (truncated)"
+    return "... (truncated)\n" + "".join(tb_lines[-max_lines:])
 
 
 @dataclass
