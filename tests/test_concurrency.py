@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from sprout import ChildRef, Executor, ExecutorConfig, FetchResult
 from sprout.concurrency import ConcurrencyGate
 
 _MAX_CONCURRENT = 2
@@ -14,6 +15,8 @@ _NO_RATE_MAX_ELAPSED = 0.2
 _BURST_FIRST_MAX = 0.1
 _BURST_GAP_MIN = 0.2
 _BURST_COUNT = 3
+_REUSE_RATE = 5.0
+_REUSE_MIN_ELAPSED = 0.18
 
 
 def test_concurrency_gate_invalid_max_at_once() -> None:
@@ -120,3 +123,24 @@ async def test_burst_respects_rate() -> None:
         assert timestamps[1] - timestamps[0] >= _BURST_GAP_MIN
     if len(timestamps) >= _BURST_COUNT:
         assert timestamps[_MAX_CONCURRENT] - timestamps[1] >= _BURST_GAP_MIN
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_carries_across_traversals_on_one_executor() -> None:
+    """Test a reused Executor keeps pacing fetches between traversals."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[str]:
+        """Leaf fetcher."""
+        return FetchResult()
+
+    executor = Executor[str](
+        fetcher=fetcher,
+        config=ExecutorConfig(max_per_second=_REUSE_RATE),
+    )
+
+    start = time.monotonic()
+    for _ in range(2):
+        await executor.expand_bounded(ChildRef(id="root"), depth=1)
+    elapsed = time.monotonic() - start
+
+    assert elapsed >= _REUSE_MIN_ELAPSED

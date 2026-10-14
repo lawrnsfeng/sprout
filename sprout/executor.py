@@ -212,17 +212,15 @@ class Executor[T]:
             TraversalAbortedError: If on_node_error="abort" and a node fails.
 
         """
+        # Each asyncio.run() has its own loop, and the gate's asyncio
+        # primitives stay bound to the loop they first waited on.
+        self._gate = ConcurrencyGate(*self._gate_limits)
         if depth is None:
             return asyncio.run(self.expand_unbounded(root_ref))
         return asyncio.run(self.expand_bounded(root_ref, depth))
 
     def _reset_state(self) -> None:
-        """Reset per-run mutable state.
-
-        The gate is rebuilt because asyncio primitives stay bound to the
-        event loop they first waited on, and each ``run_sync`` has its own.
-        """
-        self._gate = ConcurrencyGate(*self._gate_limits)
+        """Reset per-run mutable state."""
         self._seen_refs = set()
 
     async def _execute(
