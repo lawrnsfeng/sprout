@@ -20,6 +20,8 @@ _TOTAL_NODES = 4
 _MAX_DEPTH = 3
 _GRAND_TIMEOUT = 0.1
 _BLOCK_SECONDS = 0.5
+_REUSE_RATE = 5.0
+_REUSE_MIN_ELAPSED = 0.36
 
 
 def _fetch(ref: ChildRef, depth: int) -> FetchResult[str]:
@@ -163,3 +165,23 @@ def test_node_timeout_with_blocking_fetcher_can_exceed_max_at_once() -> None:
 
     assert {e.kind for e in report.errors} == {"timeout"}
     assert peak > 1
+
+
+def test_rate_limit_carries_across_run_sync_calls() -> None:
+    """Test pacing survives the new event loop each run_sync starts."""
+
+    def leaf(_ref: ChildRef, _depth: int) -> FetchResult[str]:
+        """Leaf fetch."""
+        return FetchResult()
+
+    executor = Executor[str](
+        fetcher=blocking_fetcher(leaf),
+        config=ExecutorConfig(max_per_second=_REUSE_RATE),
+    )
+
+    start = time.monotonic()
+    for _ in range(3):
+        executor.run_sync(ChildRef(id="root"), depth=1)
+    elapsed = time.monotonic() - start
+
+    assert elapsed >= _REUSE_MIN_ELAPSED

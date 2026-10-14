@@ -628,3 +628,37 @@ def test_invalid_executor_arguments_are_rejected() -> None:
             fetcher=fetcher,
             config=ExecutorConfig(node_timeout=math.nan),
         )
+
+
+async def _hang_here() -> None:
+    """Hang until cancelled."""
+    await asyncio.sleep(10.0)
+
+
+async def _dive(levels: int) -> None:
+    """Recurse to build a deep stack, then hang at the bottom."""
+    if levels:
+        await _dive(levels - 1)
+        return
+    await _hang_here()
+
+
+@pytest.mark.asyncio
+async def test_timeout_traceback_shows_where_the_fetch_was_hanging() -> None:
+    """Test a truncated node-timeout traceback keeps the fetcher's hang line."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Hang at the bottom of a deep call chain."""
+        await _dive(8)
+        return FetchResult()
+
+    config = ExecutorConfig(retry_max_attempts=1, node_timeout=_NODE_TIMEOUT)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    tb = report.errors[0].traceback
+    assert tb is not None
+    assert "truncated" in tb
+    assert "in _hang_here" in tb
+    assert tb.rstrip().splitlines()[-1].startswith("sprout.exceptions.NodeTimeoutError")

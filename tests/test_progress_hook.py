@@ -369,3 +369,31 @@ async def test_raising_error_hook_does_not_crash_executor() -> None:
 
     assert report.failed_nodes == 1
     assert report.skipped_nodes == 1
+
+
+@pytest.mark.asyncio
+async def test_hook_sees_repeated_ids_when_duplicates_are_allowed() -> None:
+    """Under on_duplicate="allow" the same ID is announced once per fetch."""
+    hook = _TrackingHook()
+
+    async def fetcher(
+        ref: ChildRef,
+        _depth: int,
+        /,
+    ) -> FetchResult[SampleItem]:
+        """Two branches both return the same child."""
+        if ref.id == "root":
+            return FetchResult(child_refs=[ChildRef(id="a"), ChildRef(id="b")])
+        if ref.id in ("a", "b"):
+            return FetchResult(child_refs=[ChildRef(id="shared")])
+        return FetchResult()
+
+    executor = Executor[SampleItem](
+        fetcher=fetcher,
+        on_duplicate="allow",
+        progress_hook=hook,
+    )
+    await executor.expand_bounded(ChildRef(id="root"), depth=3)
+
+    discovered = [cid for _parent, ids in hook.discovered for cid in ids]
+    assert discovered.count("shared") == hook.completed.count("shared") == 2

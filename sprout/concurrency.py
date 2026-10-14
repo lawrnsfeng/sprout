@@ -48,10 +48,26 @@ class ConcurrencyGate:
                 requirement=">= 0",
             )
 
-        self._semaphore = asyncio.Semaphore(max_at_once)
+        self._max_at_once = max_at_once
         self._max_per_second = max_per_second
-        self._rate_limit_lock = asyncio.Lock()
         self._last_operation_time: float | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._semaphore: asyncio.Semaphore
+        self._rate_limit_lock: asyncio.Lock
+
+    def _bind_to_running_loop(self) -> None:
+        """Give the gate fresh asyncio primitives when the event loop changed.
+
+        A Semaphore or Lock stays bound to the loop it first waited on. The
+        pacing timestamp is plain data and is kept, so the rate limit also
+        holds from one event loop to the next.
+        """
+        loop = asyncio.get_running_loop()
+        if loop is self._loop:
+            return
+        self._loop = loop
+        self._semaphore = asyncio.Semaphore(self._max_at_once)
+        self._rate_limit_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def acquire(self) -> AsyncGenerator[None]:
@@ -61,6 +77,7 @@ class ConcurrencyGate:
             None — caller performs work inside the context.
 
         """
+        self._bind_to_running_loop()
         async with self._semaphore:
             await self._wait_for_rate_limit()
             yield

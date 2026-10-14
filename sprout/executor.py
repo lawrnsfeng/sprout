@@ -30,13 +30,17 @@ from .typedefs import Fetcher, OnDuplicate, OnNodeError, ProgressHook
 
 
 def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
-    """Extract and truncate exception traceback, keeping its tail.
+    """Extract and truncate exception traceback, keeping each tail.
 
-    The tail holds the innermost frames and the exception line itself.
+    A chained exception is formatted as one section per exception, root
+    cause first. When the whole is too long, every section keeps its tail:
+    the innermost frames and the exception line. A wrapped error therefore
+    still shows where the original one arose, such as the line a fetch was
+    hanging on when its node timeout fired.
 
     Args:
         exc: Exception to extract traceback from.
-        max_lines: Maximum lines to keep.
+        max_lines: Approximate number of lines to keep.
 
     Returns:
         Truncated traceback string.
@@ -45,7 +49,23 @@ def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
     if len(tb_lines) <= max_lines:
         return "".join(tb_lines)
-    return "... (truncated)\n" + "".join(tb_lines[-max_lines:])
+
+    # The line that links two chained exceptions starts with a newline.
+    sections: list[list[str]] = [[]]
+    for line in tb_lines:
+        if line.startswith("\n"):
+            sections.append([])
+        sections[-1].append(line)
+
+    keep = max(max_lines // len(sections), 2)
+    parts: list[str] = []
+    for section in sections:
+        if len(section) <= keep:
+            parts.extend(section)
+            continue
+        link = section[0] if section[0].startswith("\n") else ""
+        parts.extend([link, "... (truncated)\n", *section[-keep:]])
+    return "".join(parts)
 
 
 def blocking_fetcher[T](
@@ -89,6 +109,7 @@ class _SpawnContext[T]:
         node_map: Mapping from task to tree node.
         max_depth: Maximum traversal depth (None = unbounded).
         clock: Grand timeout clock.
+        seen_refs: IDs of every ref spawned so far in this traversal.
 
     """
 
@@ -97,6 +118,7 @@ class _SpawnContext[T]:
     node_map: dict[asyncio.Task[FetchResult[T]], "TreeNode[T]"]
     max_depth: int | None
     clock: GrandClock
+    seen_refs: set[str]
 
 
 class Executor[T]:
@@ -105,6 +127,11 @@ class Executor[T]:
     Orchestrates recursive fetching with retry, concurrency control,
     grand timeout, configurable error handling, deduplication, and
     full ancestor path tracking.
+
+    One Executor can run any number of traversals, one after another or
+    concurrently on one event loop. Each traversal has its own dedup state;
+    they share the concurrency and rate limits. An Executor is not
+    thread-safe: do not run traversals on it from two threads at once.
     """
 
     def __init__(  # noqa: PLR0913
@@ -155,15 +182,12 @@ class Executor[T]:
         self._retry_config = retry_config or RetryConfig(
             max_attempts=cfg.retry_max_attempts,
         )
-        self._gate_limits = (cfg.max_at_once, cfg.max_per_second)
-        self._gate = ConcurrencyGate(*self._gate_limits)
-        self._gate_loop: asyncio.AbstractEventLoop | None = None
+        self._gate = ConcurrencyGate(cfg.max_at_once, cfg.max_per_second)
         self._level_timeout = cfg.level_timeout
         self._node_timeout = cfg.node_timeout
         self._on_node_error = on_node_error
         self._on_duplicate = on_duplicate
         self._progress_hook = progress_hook
-        self._seen_refs: set[str] = set()
 
     async def expand_bounded(
         self,
@@ -187,7 +211,6 @@ class Executor[T]:
         if depth < 1:
             raise InvalidParameterError(param="depth", requirement=">= 1")
 
-        self._reset_state()
         clock = StaticClock(depth * self._level_timeout)
         return await self._execute(root_ref, depth, clock)
 
@@ -207,7 +230,6 @@ class Executor[T]:
             TraversalAbortedError: If on_node_error="abort" and a node fails.
 
         """
-        self._reset_state()
         clock = DynamicClock(
             base_seconds=self._level_timeout,
             per_level_seconds=self._level_timeout,
@@ -252,20 +274,6 @@ class Executor[T]:
             # Never started if asyncio.run() refused a running loop.
             traversal.close()
 
-    def _reset_state(self) -> None:
-        """Reset per-run mutable state.
-
-        The gate is rebuilt only when the running event loop changed: its
-        asyncio primitives stay bound to the loop they first waited on.
-        Within one loop it is kept, so rate-limit state carries across
-        traversals.
-        """
-        loop = asyncio.get_running_loop()
-        if loop is not self._gate_loop:
-            self._gate = ConcurrencyGate(*self._gate_limits)
-            self._gate_loop = loop
-        self._seen_refs = set()
-
     async def _execute(
         self,
         root_ref: ChildRef,
@@ -290,8 +298,6 @@ class Executor[T]:
         live_tasks: set[asyncio.Task[FetchResult[T]]] = set()
         node_map: dict[asyncio.Task[FetchResult[T]], TreeNode[T]] = {}
 
-        self._seen_refs.add(root_ref.id)
-
         timeout_task = asyncio.create_task(clock.wait_for_timeout())
 
         ctx: _SpawnContext[T] = _SpawnContext(
@@ -300,6 +306,7 @@ class Executor[T]:
             node_map=node_map,
             max_depth=max_depth,
             clock=clock,
+            seen_refs={root_ref.id},
         )
 
         root_task = self._create_fetch_task(root_node, clock)
@@ -437,22 +444,25 @@ class Executor[T]:
             self._hook_node_complete(parent_id)
             return
 
+        # "allow" blocks only a ref that is its own ancestor (a cycle);
+        # "skip_mark" blocks every ID spawned so far in this traversal.
+        # ponytail: "allow" costs O(depth) per parent; keep the ancestor set
+        # on the node instead if deep trees make this slow.
+        allow = self._on_duplicate == "allow"
+        path: list[str] | None = node.path if allow else None
+        ancestors = set(path or ())
+
         spawned_ids: list[str] = []
-        path: list[str] | None = None
-        blocked = self._seen_refs
-        if self._on_duplicate == "allow":
-            # ponytail: O(depth) per parent; keep the ancestor set on the
-            # node instead if deep trees make this slow.
-            path = node.path
-            blocked = set(path)
         for child_ref in fetch_result.child_refs:
-            if child_ref.id in blocked:
+            if child_ref.id in (ancestors if allow else ctx.seen_refs):
+                # The path is built once per parent, not per duplicate.
                 path = path or node.path
                 self._hook_node_error(
                     node.record_duplicate_child(child_ref, ctx.report, path=path),
                 )
                 continue
-            self._seen_refs.add(child_ref.id)
+            if not allow:
+                ctx.seen_refs.add(child_ref.id)
 
             child_node = node.spawn_child(child_ref)
 

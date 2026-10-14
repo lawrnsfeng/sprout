@@ -1,5 +1,7 @@
 """Tests for Sprout duplicate child ref detection."""
 
+import asyncio
+
 import pytest
 
 from sprout import (
@@ -183,3 +185,31 @@ async def test_allow_still_breaks_cycles() -> None:
         ("duplicate_skipped", ["root", "node-a", "node-b", "root"]),
         ("duplicate_skipped", ["root", "node-a", "node-b", "node-b"]),
     ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_traversals_on_one_executor_are_isolated() -> None:
+    """Test two traversals at once keep their own dedup state."""
+
+    async def fetcher(ref: ChildRef, depth: int) -> FetchResult[SampleItem]:
+        """Each root returns the shared child and a ref back to itself."""
+        await asyncio.sleep(0.01)
+        if depth == 0:
+            return FetchResult(
+                child_refs=[ChildRef(id="shared"), ChildRef(id=ref.id)],
+            )
+        return FetchResult(items=[SampleItem(ref.id)])
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    results = await asyncio.gather(
+        executor.expand_bounded(ChildRef(id="root-a"), depth=2),
+        executor.expand_bounded(ChildRef(id="root-b"), depth=2),
+    )
+
+    for root_id, (tree, report) in zip(("root-a", "root-b"), results, strict=True):
+        assert report.total_nodes == _CHILDREN_WITH_DUP
+        assert [n.node_id for n in tree.subtree] == [root_id, "shared"]
+        assert [(e.kind, e.node_id) for e in report.errors] == [
+            ("duplicate_skipped", root_id),
+        ]

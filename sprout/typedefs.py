@@ -43,6 +43,10 @@ class ProgressHook(Protocol):
     ``TraversalReport.errors``: failed, timed-out and cancelled nodes, and
     skipped duplicates. A skipped duplicate was never announced through
     ``on_children_discovered``.
+
+    Hooks receive bare node IDs. With ``on_duplicate="allow"`` the same ID
+    can be discovered and completed more than once, so a hook that tracks
+    pending work must count IDs rather than keep them in a set.
     """
 
     def on_children_discovered(
