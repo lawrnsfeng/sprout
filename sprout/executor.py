@@ -197,45 +197,54 @@ class Executor[T]:
         live_tasks.add(root_task)
         node_map[root_task] = root_node
 
-        while live_tasks:
-            wait_set: set[asyncio.Task[FetchResult[T]] | asyncio.Task[None]] = {
-                timeout_task,
-                *live_tasks,
-            }
-            done, pending = await asyncio.wait(
-                wait_set,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            live_tasks = cast(
-                "set[asyncio.Task[FetchResult[T]]]",
-                {task for task in pending if task is not timeout_task},
-            )
-            ctx.live_tasks = live_tasks
+        try:
+            while live_tasks:
+                wait_set: set[asyncio.Task[FetchResult[T]] | asyncio.Task[None]] = {
+                    timeout_task,
+                    *live_tasks,
+                }
+                done, pending = await asyncio.wait(
+                    wait_set,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                live_tasks = cast(
+                    "set[asyncio.Task[FetchResult[T]]]",
+                    pending - {timeout_task},
+                )
+                ctx.live_tasks = live_tasks
 
-            for task in done:
-                if task is timeout_task:
+                # Fetches that finished in the same wakeup as the grand timeout
+                # are still accounted for before the timeout is handled.
+                for fetch_task in cast(
+                    "set[asyncio.Task[FetchResult[T]]]",
+                    done - {timeout_task},
+                ):
+                    node = node_map.pop(fetch_task)
+
+                    if fetch_task.cancelled():
+                        report.timed_out = report.timed_out or clock.is_cancelled
+                        node.mark_cancelled(report, path=self._build_path(node))
+                        continue
+
+                    try:
+                        fetch_result = fetch_task.result()
+                    except FetcherError as fetcher_err:
+                        await self._handle_fetch_error(
+                            node,
+                            fetcher_err.original_error,
+                            report,
+                            live_tasks,
+                        )
+                    else:
+                        self._handle_success_and_spawn_children(
+                            node,
+                            fetch_result,
+                            ctx,
+                        )
+
+                if timeout_task in done:
                     await self._handle_timeout(report, live_tasks, node_map)
-                    break
-
-                fetch_task = cast("asyncio.Task[FetchResult[T]]", task)
-                node = node_map.pop(fetch_task)
-
-                try:
-                    fetch_result = await fetch_task
-                    self._handle_success_and_spawn_children(
-                        node,
-                        fetch_result,
-                        ctx,
-                    )
-                except FetcherError as fetcher_err:
-                    await self._handle_fetch_error(
-                        node,
-                        fetcher_err.original_error,
-                        report,
-                        live_tasks,
-                    )
-
-        if not timeout_task.done():
+        finally:
             timeout_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await timeout_task
@@ -250,6 +259,8 @@ class Executor[T]:
         node_map: dict[asyncio.Task[FetchResult[T]], "TreeNode[T]"],
     ) -> None:
         """Cancel all live tasks on grand timeout and mark nodes."""
+        if not live_tasks:
+            return
         report.timed_out = True
         for task in live_tasks:
             task.cancel()

@@ -1,5 +1,6 @@
 """Tests for Sprout retry module."""
 
+import asyncio
 import time
 
 import pytest
@@ -203,3 +204,21 @@ async def test_retry_with_retry_after_hook() -> None:
 
     assert result == "done"
     assert call_count == _RETRY_ATTEMPTS_3
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_is_never_retried() -> None:
+    """Test cancellation propagates at once, even with the retry-all default."""
+    calls = 0
+
+    async def cancelled() -> None:
+        nonlocal calls
+        calls += 1
+        raise asyncio.CancelledError
+
+    retrying = RetryConfig(max_attempts=_RETRY_ATTEMPTS_3).as_retrying()
+
+    with pytest.raises(asyncio.CancelledError):
+        await retrying(cancelled)
+
+    assert calls == 1

@@ -12,11 +12,30 @@ from sprout import (
     FetchResult,
     TraversalAbortedError,
 )
+from sprout.clock import GrandClock
 
 _SKIP_MARK_TOTAL = 3
 _ABORT_MAX_ELAPSED = 2.0
 _FAIL_DEPTH = 2
 _RETRY_ATTEMPTS = 3
+
+
+class _EventClock(GrandClock):
+    """Grand clock that times out when its event is set."""
+
+    def __init__(self) -> None:
+        """Initialize with an unset event."""
+        super().__init__()
+        self.fire = asyncio.Event()
+
+    def remaining_seconds(self) -> float:
+        """Report no remaining budget."""
+        return 0.0
+
+    async def wait_for_timeout(self) -> None:
+        """Time out as soon as the event is set."""
+        await self.fire.wait()
+        self.cancel()
 
 
 class SampleItem:
@@ -237,3 +256,96 @@ async def test_retry_exhausted_recorded() -> None:
 
     assert report.failed_nodes == 1
     assert report.errors[0].attempts == _RETRY_ATTEMPTS
+
+
+@pytest.mark.asyncio
+async def test_fetch_finishing_with_grand_timeout_is_not_dropped() -> None:
+    """Test a fetch completing in the same wakeup as the timeout is kept."""
+    clock = _EventClock()
+
+    async def fetcher(ref: ChildRef, depth: int) -> FetchResult[SampleItem]:
+        """Fire the grand timeout while the root fetch completes."""
+        clock.fire.set()
+        if depth == 0:
+            return FetchResult(
+                items=[SampleItem(ref.id)],
+                child_refs=[ChildRef(id="child-1"), ChildRef(id="child-2")],
+            )
+        return FetchResult()
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    tree, report = await executor._execute(ChildRef(id="root"), 2, clock)
+
+    assert tree.result is not None
+    assert report.total_nodes == 1
+    assert report.timed_out is True
+    assert report.cancelled_nodes == len(tree.children) == 2
+    assert all(child.error is not None for child in tree.children)
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_all_work_finished_is_not_a_timeout() -> None:
+    """Test the timer firing with nothing left to fetch cuts nothing short."""
+    clock = _EventClock()
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Fire the grand timeout while the only fetch completes."""
+        clock.fire.set()
+        return FetchResult()
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    _tree, report = await executor._execute(ChildRef(id="root"), 1, clock)
+
+    assert report.total_nodes == 1
+    assert report.timed_out is False
+    assert report.errors == []
+
+
+@pytest.mark.asyncio
+async def test_abort_leaves_no_pending_tasks() -> None:
+    """Test aborting a traversal does not leak the grand-timeout task."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Fail at once."""
+        msg = "abort!"
+        raise RuntimeError(msg)
+
+    executor = Executor[SampleItem](
+        fetcher=fetcher,
+        config=ExecutorConfig(retry_max_attempts=1),
+        on_node_error="abort",
+    )
+
+    with pytest.raises(TraversalAbortedError):
+        await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+@pytest.mark.asyncio
+async def test_fetcher_cancellation_marks_one_node_and_continues() -> None:
+    """Test a fetch that ends cancelled is recorded without crashing the run."""
+    calls: list[str] = []
+
+    async def fetcher(ref: ChildRef, depth: int) -> FetchResult[SampleItem]:
+        """Raise CancelledError for one child."""
+        calls.append(ref.id)
+        if ref.id == "cancelled-child":
+            raise asyncio.CancelledError
+        if depth == 0:
+            return FetchResult(
+                child_refs=[ChildRef(id="cancelled-child"), ChildRef(id="good")],
+            )
+        return FetchResult(items=[SampleItem(ref.id)])
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert calls.count("cancelled-child") == 1
+    assert report.total_nodes == 2
+    assert report.cancelled_nodes == 1
+    assert report.timed_out is False
+    assert [e.node_id for e in report.errors] == ["cancelled-child"]

@@ -4,6 +4,7 @@ Uses tenacity for retry orchestration but remains HTTP-client-agnostic.
 Callers provide their own RetryPredicate and optional RetryAfterHook.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 
 from tenacity import (
@@ -100,6 +101,10 @@ class RetryConfig:
         return AsyncRetrying(
             stop=stop_after_attempt(self.max_attempts),
             wait=wait,
-            retry=retry_if_exception(self.is_retryable),
+            retry=retry_if_exception(self._should_retry),
             reraise=True,
         )
+
+    def _should_retry(self, exc: BaseException) -> bool:
+        """Never retry cancellation; otherwise defer to ``is_retryable``."""
+        return not isinstance(exc, asyncio.CancelledError) and self.is_retryable(exc)
