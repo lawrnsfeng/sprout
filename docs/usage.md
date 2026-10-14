@@ -70,9 +70,16 @@ config = ExecutorConfig(
     max_at_once=5,       # at most 5 concurrent fetches
     max_per_second=10.0, # at most 10 fetches/sec across all of them
     level_timeout=15.0,  # seconds of budget per depth level
+    node_timeout=5.0,    # seconds for one fetch attempt of one node
 )
 executor = Executor[str](fetcher=fetch_dir, config=config)
 ```
+
+`level_timeout` budgets the whole traversal; `node_timeout` bounds a single
+fetch attempt. Without it, one hung fetch runs until the whole-traversal
+budget expires and takes every in-flight sibling down with it. With it, the
+hung attempt raises `TimeoutError`, goes through the normal retry policy,
+and the node fails on its own with `kind == "timeout"`.
 
 For app-wide settings objects, build the same config from a plain
 `SproutSettings` dataclass:
@@ -159,7 +166,15 @@ children are spawned; `on_node_complete` fires for leaves with nothing left
 to spawn. Hooks run synchronously on the executor's event loop and any
 exception they raise is swallowed, so keep them fast and non-blocking.
 
+A hook may also define `on_node_error`. It is optional: the executor calls
+it only if the hook has it. It fires once for every `NodeError` added to
+`report.errors` (failed, timed-out and cancelled nodes, and skipped
+duplicates), so a live error line needs no wrapper around the fetcher.
+
 ```python
+from sprout import NodeError
+
+
 class PrintProgress:
     """Minimal ProgressHook that prints as the crawl unfolds."""
 
@@ -169,6 +184,9 @@ class PrintProgress:
     def on_node_complete(self, node_id: str) -> None:
         print(f"{node_id}: done")
 
+    def on_node_error(self, node_id: str, error: NodeError) -> None:
+        print(f"{node_id}: {error.kind} after {error.elapsed_ms} ms")
+
 
 executor = Executor[str](fetcher=fetch_dir, progress_hook=PrintProgress())
 ```
@@ -176,28 +194,44 @@ executor = Executor[str](fetcher=fetch_dir, progress_hook=PrintProgress())
 ## 7. Inspecting results
 
 `expand_bounded`/`expand_unbounded` return `(TreeNode, TraversalReport)`.
-Walk the tree for the fetched data, or use the report for a summary:
+Iterate the tree for the fetched data, or use the report for a summary:
 
 ```python
-def count_items(node) -> int:
-    total = len(node.result.items) if node.result else 0
-    return total + sum(count_items(child) for child in node.children)
-
-
 tree, report = await executor.expand_bounded(ChildRef(id="."), depth=3)
 
 print(report.as_dict)
 # {'total_nodes': ..., 'failed_nodes': ..., 'cancelled_nodes': ...,
 #  'skipped_nodes': ..., 'max_depth_seen': ..., 'elapsed_ms': ..., 'timed_out': ...}
 
-for child in tree.children:
-    if child.partial:
-        print(f"{child.ref.id} was cut short by the grand timeout")
-    if child.error is not None:
-        print(f"{child.ref.id} failed: {child.error.kind}")
+if report.errors:
+    print("the crawl is incomplete")
 
-print(f"total items: {count_items(tree)}")
+for node in tree.subtree:  # this node, then every descendant, pre-order
+    if node.partial:
+        print(f"{node.ref.id} was cut short by the grand timeout")
+    if node.error is not None:
+        print(f"{'/'.join(node.path)} failed: {node.error.kind}")
+
+total = sum(len(node.result.items) for node in tree.subtree if node.result)
+print(f"total items: {total}")
 ```
+
+`report.errors` is empty exactly when every discovered ref was fetched, so
+it is the one check for "did anything go wrong".
+
+Every node keeps its `ref`, its `result` or `error`, the `attempts` made
+and the `elapsed_ms` spent, so results join back to the inputs that produced
+them without any ID conventions:
+
+```python
+by_id = {node.ref.id: node for node in tree.subtree}
+
+node = by_id["./docs"]
+print(node.ref.payload, node.result, node.error, node.path)
+```
+
+After a grand timeout, `elapsed_ms` tells the nodes apart: a cancelled node
+that was running reports how long, and one that was still queued reports 0.
 
 For debugging a run — especially failures or timeouts — dump the whole
 execution graph (tree structure, report, and flattened error list) to JSON:
@@ -208,7 +242,50 @@ from pathlib import Path
 tree.dump_execution_graph(report, Path("crawl-debug.json"))
 ```
 
-Duplicate child references (the same `ChildRef.id` discovered twice, e.g. two
-parent directories symlinking to the same target) are automatically detected
-and recorded as `duplicate_skipped` errors on the parent rather than being
-fetched again — no extra configuration needed.
+## 8. Duplicate refs
+
+By default (`on_duplicate="skip_mark"`) each `ChildRef.id` is fetched once
+per traversal. A later sighting of the same ID, e.g. two parent directories
+symlinking to the same target, is recorded as a `duplicate_skipped` error
+rather than fetched again.
+
+Set `on_duplicate="allow"` when the same ID under two parents is two pieces
+of work, not one:
+
+```python
+executor = Executor[str](fetcher=fetch_dir, on_duplicate="allow")
+```
+
+The same ID is then fetched under every parent that returns it. A ref that
+is its own ancestor is still skipped and recorded, so a cycle terminates.
+IDs are no longer unique in the tree; tell the nodes apart by `node.path`.
+On a graph with many shared nodes, `allow` fetches each one once per path
+that reaches it, so prefer `expand_bounded` there.
+
+## 9. Synchronous callers
+
+A script or CLI with a blocking client needs neither `async def` nor its own
+event loop. `blocking_fetcher` runs a plain function in a worker thread, and
+`run_sync` runs the traversal to completion:
+
+```python
+from pathlib import Path
+
+from sprout import ChildRef, Executor, FetchResult, blocking_fetcher
+
+
+def fetch_dir(ref: ChildRef, depth: int) -> FetchResult[str]:
+    path = Path(ref.id)
+    files = [str(p) for p in path.iterdir() if p.is_file()]
+    dirs = [ChildRef(id=str(p)) for p in path.iterdir() if p.is_dir()]
+    return FetchResult(items=files, child_refs=dirs)
+
+
+executor = Executor[str](fetcher=blocking_fetcher(fetch_dir))
+tree, report = executor.run_sync(ChildRef(id="."), depth=3)  # omit depth for unbounded
+```
+
+`run_sync` starts its own event loop, so call it from synchronous code only.
+A blocking call cannot be interrupted: after a timeout the traversal moves
+on, but the worker thread runs until the call returns. Give the underlying
+client its own timeout.

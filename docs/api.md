@@ -4,6 +4,8 @@
 
 ::: sprout.Executor
 
+::: sprout.blocking_fetcher
+
 ## Configuration
 
 ::: sprout.ExecutorConfig
@@ -31,6 +33,8 @@
 ::: sprout.ProgressHook
 
 ::: sprout.OnNodeError
+
+::: sprout.OnDuplicate
 
 ::: sprout.RetryPredicate
 
