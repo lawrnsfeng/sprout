@@ -230,3 +230,25 @@ async def test_cancelled_error_is_never_retried() -> None:
         await retrying(cancelled)
 
     assert calls == 1
+
+
+class _StopEverything(BaseException):
+    """Stand-in for KeyboardInterrupt and SystemExit."""
+
+
+@pytest.mark.asyncio
+async def test_non_exception_errors_are_never_retried() -> None:
+    """Test a BaseException outside Exception propagates at once."""
+    calls = 0
+
+    async def interrupted() -> None:
+        nonlocal calls
+        calls += 1
+        raise _StopEverything
+
+    retrying = RetryConfig(max_attempts=_RETRY_ATTEMPTS_3).as_retrying()
+
+    with pytest.raises(_StopEverything):
+        await retrying(interrupted)
+
+    assert calls == 1

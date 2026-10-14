@@ -4,7 +4,6 @@ Uses tenacity for retry orchestration but remains HTTP-client-agnostic.
 Callers provide their own RetryPredicate and optional RetryAfterHook.
 """
 
-import asyncio
 from dataclasses import dataclass, field
 
 from tenacity import (
@@ -107,5 +106,9 @@ class RetryConfig:
         )
 
     def _should_retry(self, exc: BaseException) -> bool:
-        """Never retry cancellation; otherwise defer to ``is_retryable``."""
-        return not isinstance(exc, asyncio.CancelledError) and self.is_retryable(exc)
+        """Retry only ordinary errors that ``is_retryable`` accepts.
+
+        Cancellation, ``KeyboardInterrupt`` and ``SystemExit`` are not
+        ``Exception`` subclasses and always propagate at once.
+        """
+        return isinstance(exc, Exception) and self.is_retryable(exc)

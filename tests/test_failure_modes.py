@@ -478,3 +478,28 @@ async def test_caller_cancellation_stops_in_flight_fetches() -> None:
 
     assert cancelled == ["root"]
     assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+@pytest.mark.asyncio
+async def test_attempts_not_inflated_by_cancelled_backoff() -> None:
+    """Test a node cancelled while waiting to retry counts real attempts."""
+    calls = 0
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Fail at once, every time."""
+        nonlocal calls
+        calls += 1
+        msg = "always"
+        raise RuntimeError(msg)
+
+    executor = Executor[SampleItem](
+        fetcher=fetcher,
+        config=ExecutorConfig(level_timeout=_GRAND_TIMEOUT),
+        retry_config=RetryConfig(max_attempts=_RETRY_ATTEMPTS, min_wait=5.0),
+    )
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert calls == 1
+    assert report.errors[0].kind == "cancelled"
+    assert report.errors[0].attempts == 1

@@ -493,7 +493,6 @@ class Executor[T]:
                 try:
                     return await retrying(self._fetch_once, node, clock)
                 finally:
-                    node.attempts = retrying.statistics.get("attempt_number", 0)
                     node.elapsed_ms = int((time.monotonic() - started) * 1000)
         except asyncio.CancelledError:
             raise
@@ -519,6 +518,7 @@ class Executor[T]:
 
         """
         clock.check_cancelled()
+        node.attempts += 1
         async with asyncio.timeout(self._node_timeout):
             return await self._fetcher(
                 node.ref or ChildRef(id="root"),
