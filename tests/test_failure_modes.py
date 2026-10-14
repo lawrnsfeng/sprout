@@ -426,3 +426,29 @@ async def test_attempts_is_the_actual_count() -> None:
 
     assert report.errors[0].kind == "fetch_failed"
     assert report.errors[0].attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_starting_after_clock_expiry_is_marked_cancelled() -> None:
+    """Test a fetch that starts once the clock has expired never runs."""
+    clock = _EventClock()
+    calls: list[str] = []
+
+    async def fetcher(ref: ChildRef, depth: int) -> FetchResult[SampleItem]:
+        """Expire the clock from the root fetch, before the child starts."""
+        calls.append(ref.id)
+        if depth == 0:
+            clock.cancel()
+            return FetchResult(child_refs=[ChildRef(id="late")])
+        return FetchResult()
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    tree, report = await executor._execute(ChildRef(id="root"), 2, clock)
+
+    assert calls == ["root"]
+    assert report.timed_out is True
+    assert report.cancelled_nodes == 1
+    late = tree.children[0]
+    assert late.error is not None
+    assert (late.error.kind, late.error.attempts) == ("cancelled", 0)
