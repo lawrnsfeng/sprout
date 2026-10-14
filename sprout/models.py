@@ -156,12 +156,14 @@ class TreeNode[T]:
     elapsed_ms: int = 0
 
     def __post_init__(self) -> None:
-        """Start without a parent; ``spawn_child`` links the two nodes.
+        """Start without a parent and adopt any children passed in.
 
         The back-reference is not a dataclass field, so field-walking
         helpers such as ``dataclasses.asdict`` do not follow it in a loop.
         """
         self._parent: TreeNode[T] | None = None
+        for child in self.children:
+            child._parent = self  # noqa: SLF001 - another instance of this class
 
     @property
     def parent(self) -> "TreeNode[T] | None":

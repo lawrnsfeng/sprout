@@ -316,3 +316,17 @@ def test_mark_methods_record_the_nodes_own_state() -> None:
     assert cancelled.node_id == "b"
     assert cancelled.path == ["root", "b"]
     assert report.errors == [failed, cancelled]
+
+
+def test_tree_node_adopts_children_given_to_the_constructor() -> None:
+    """Test children passed in directly, or through replace, get a parent."""
+    child: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="c"))
+    node: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="r"), children=[child])
+
+    assert child.parent is node
+    assert child.path == ["r", "c"]
+
+    copy = dataclasses.replace(node)
+
+    assert copy.parent is None
+    assert copy.children[0].parent is copy
