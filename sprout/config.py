@@ -12,6 +12,8 @@ class SproutSettings:
         max_per_second: Maximum fetches per second (0 = unlimited).
         level_timeout_seconds: Timeout budget per depth level.
         retry_max_attempts: Maximum retry attempts per node.
+        node_timeout_seconds: Timeout for one fetch attempt of one node
+            (None = no per-node timeout).
 
     """
 
@@ -19,6 +21,7 @@ class SproutSettings:
     max_per_second: float = 10.0
     level_timeout_seconds: float = 30.0
     retry_max_attempts: int = 4
+    node_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,9 @@ class ExecutorConfig:
         max_at_once: Maximum concurrent fetches (bounded semaphore).
         max_per_second: Maximum fetches per second (0 = unlimited).
         level_timeout: Timeout budget per depth level in seconds.
+        node_timeout: Timeout for one fetch attempt of one node in seconds
+            (None = no per-node timeout). A timed-out attempt raises
+            ``TimeoutError``, which is retried like any other failure.
 
     """
 
@@ -37,6 +43,7 @@ class ExecutorConfig:
     max_at_once: int = 8
     max_per_second: float = 10.0
     level_timeout: float = 30.0
+    node_timeout: float | None = None
 
     @classmethod
     def from_settings(
@@ -57,4 +64,5 @@ class ExecutorConfig:
             max_at_once=settings.max_at_once,
             max_per_second=settings.max_per_second,
             level_timeout=settings.level_timeout_seconds,
+            node_timeout=settings.node_timeout_seconds,
         )

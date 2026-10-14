@@ -10,6 +10,7 @@ from sprout import (
     Executor,
     ExecutorConfig,
     FetchResult,
+    RetryConfig,
     TraversalAbortedError,
 )
 from sprout.clock import GrandClock
@@ -18,6 +19,9 @@ _SKIP_MARK_TOTAL = 3
 _ABORT_MAX_ELAPSED = 2.0
 _FAIL_DEPTH = 2
 _RETRY_ATTEMPTS = 3
+_NODE_TIMEOUT = 0.1
+_NODE_TIMEOUT_MS = 100
+_GRAND_TIMEOUT = 0.3
 
 
 class _EventClock(GrandClock):
@@ -349,3 +353,76 @@ async def test_fetcher_cancellation_marks_one_node_and_continues() -> None:
     assert report.cancelled_nodes == 1
     assert report.timed_out is False
     assert [e.node_id for e in report.errors] == ["cancelled-child"]
+
+
+async def _one_hung_child(ref: ChildRef, depth: int) -> FetchResult[SampleItem]:
+    """Root returns a child that hangs and a child that answers."""
+    if depth == 0:
+        return FetchResult(
+            child_refs=[ChildRef(id="hung"), ChildRef(id="good")],
+        )
+    if ref.id == "hung":
+        await asyncio.sleep(10.0)
+    return FetchResult(items=[SampleItem(ref.id)])
+
+
+@pytest.mark.asyncio
+async def test_node_timeout_fails_only_the_hung_node() -> None:
+    """Test node_timeout names the hung node and leaves its siblings alone."""
+    config = ExecutorConfig(retry_max_attempts=1, node_timeout=_NODE_TIMEOUT)
+    executor = Executor[SampleItem](fetcher=_one_hung_child, config=config)
+
+    tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert report.timed_out is False
+    assert report.total_nodes == 2
+    assert report.failed_nodes == 1
+
+    error = report.errors[0]
+    assert error.kind == "timeout"
+    assert error.node_id == "hung"
+    assert error.last_exception_type == "TimeoutError"
+    assert error.attempts == 1
+    assert error.elapsed_ms >= _NODE_TIMEOUT_MS
+    assert error.as_dict["elapsed_ms"] == error.elapsed_ms
+    assert tree.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_grand_timeout_reports_which_node_was_running() -> None:
+    """Test cancelled nodes say whether they were running or still queued."""
+    config = ExecutorConfig(max_at_once=1, level_timeout=_GRAND_TIMEOUT)
+    executor = Executor[SampleItem](fetcher=_one_hung_child, config=config)
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert report.timed_out is True
+    mp_str_error = {e.node_id: e for e in report.errors}
+    assert {e.kind for e in report.errors} == {"cancelled"}
+    assert mp_str_error["hung"].attempts == 1
+    assert mp_str_error["hung"].elapsed_ms > 0
+    assert mp_str_error["good"].attempts == 0
+    assert mp_str_error["good"].elapsed_ms == 0
+
+
+@pytest.mark.asyncio
+async def test_attempts_is_the_actual_count() -> None:
+    """Test a non-retryable failure reports one attempt, not the maximum."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Fail at once."""
+        msg = "not retryable"
+        raise RuntimeError(msg)
+
+    executor = Executor[SampleItem](
+        fetcher=fetcher,
+        retry_config=RetryConfig(
+            max_attempts=_RETRY_ATTEMPTS,
+            is_retryable=lambda _exc: False,
+        ),
+    )
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert report.errors[0].kind == "fetch_failed"
+    assert report.errors[0].attempts == 1

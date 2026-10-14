@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import time
 import traceback
 from dataclasses import dataclass
 from typing import cast
@@ -100,6 +101,7 @@ class Executor[T]:
         )
         self._gate = ConcurrencyGate(cfg.max_at_once, cfg.max_per_second)
         self._level_timeout = cfg.level_timeout
+        self._node_timeout = cfg.node_timeout
         self._on_node_error = on_node_error
         self._progress_hook = progress_hook
         self._seen_refs: set[str] = set()
@@ -288,7 +290,7 @@ class Executor[T]:
         node_error = node.mark_failed(
             exc,
             report,
-            attempts=self._retry_config.max_attempts,
+            attempts=node.attempts,
             traceback=_truncate_traceback(exc),
             path=node.path,
         )
@@ -402,6 +404,9 @@ class Executor[T]:
     ) -> "FetchResult[T]":
         """Fetch a node with retry and concurrency control.
 
+        Records the attempts made and the time spent on the node, also when
+        the fetch fails or is cancelled.
+
         Raises:
             FetcherError: If fetch fails after retries.
             asyncio.CancelledError: If traversal is cancelled.
@@ -413,7 +418,12 @@ class Executor[T]:
             async with self._gate.acquire():
                 clock.check_cancelled()
                 retrying = self._retry_config.as_retrying()
-                return await retrying(self._fetch_once, node, clock)
+                started = time.monotonic()
+                try:
+                    return await retrying(self._fetch_once, node, clock)
+                finally:
+                    node.attempts = retrying.statistics.get("attempt_number", 0)
+                    node.elapsed_ms = int((time.monotonic() - started) * 1000)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -433,9 +443,13 @@ class Executor[T]:
         Returns:
             Fetch result from the user-provided fetcher.
 
+        Raises:
+            TimeoutError: If the attempt exceeds the per-node timeout.
+
         """
         clock.check_cancelled()
-        return await self._fetcher(
-            node.ref or ChildRef(id="root"),
-            node.depth,
-        )
+        async with asyncio.timeout(self._node_timeout):
+            return await self._fetcher(
+                node.ref or ChildRef(id="root"),
+                node.depth,
+            )

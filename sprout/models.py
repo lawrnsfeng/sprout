@@ -44,13 +44,17 @@ class NodeError:
     """Error information for a failed or skipped node.
 
     Attributes:
-        kind: Type of error that occurred.
-        attempts: Number of retry attempts made.
+        kind: Type of error that occurred. ``timeout`` is a fetch that
+            raised ``TimeoutError``; ``cancelled`` is a node cut off by the
+            grand timeout.
+        attempts: Number of fetch attempts made.
         last_exception_type: Type name of the last exception.
         last_exception_repr: String representation of the last exception.
         node_id: ID of the node that failed.
         traceback: Truncated traceback string (optional).
         path: Full ancestor path from root to this node.
+        elapsed_ms: Time spent fetching this node, retries included, in
+            milliseconds (0 if the fetch never started).
 
     """
 
@@ -67,6 +71,7 @@ class NodeError:
     node_id: str
     traceback: str | None = None
     path: list[str] = field(default_factory=list)
+    elapsed_ms: int = 0
 
     @property
     def as_dict(self) -> dict[str, object]:
@@ -79,6 +84,7 @@ class NodeError:
             "last_exception_repr": self.last_exception_repr,
             "traceback": self.traceback,
             "path": self.path,
+            "elapsed_ms": self.elapsed_ms,
         }
 
 
@@ -133,6 +139,9 @@ class TreeNode[T]:
         partial: True if this subtree was cancelled mid-traversal.
         depth: Depth of this node in the tree (0 for root).
         parent: Node this one was spawned from (None for root).
+        attempts: Number of fetch attempts made for this node.
+        elapsed_ms: Time spent fetching this node, retries included, in
+            milliseconds (0 if the fetch never started).
 
     """
 
@@ -143,6 +152,8 @@ class TreeNode[T]:
     partial: bool = False
     depth: int = 0
     parent: "TreeNode[T] | None" = field(default=None, repr=False, compare=False)
+    attempts: int = 0
+    elapsed_ms: int = 0
 
     @property
     def path(self) -> list[str]:
@@ -190,11 +201,12 @@ class TreeNode[T]:
         self.partial = True
         self.error = NodeError(
             kind="cancelled",
-            attempts=0,
+            attempts=self.attempts,
             last_exception_type="CancelledError",
             last_exception_repr="Task cancelled",
             node_id=self.ref.id if self.ref else "root",
             path=path,
+            elapsed_ms=self.elapsed_ms,
         )
         report.cancelled_nodes += 1
         report.errors.append(self.error)
@@ -211,13 +223,14 @@ class TreeNode[T]:
     ) -> NodeError:
         """Attach failure info to this node and record it on the report."""
         node_error = NodeError(
-            kind="fetch_failed",
+            kind="timeout" if isinstance(exc, TimeoutError) else "fetch_failed",
             attempts=attempts,
             last_exception_type=type(exc).__name__,
             last_exception_repr=repr(exc),
             traceback=traceback,
             node_id=self.ref.id if self.ref else "root",
             path=path,
+            elapsed_ms=self.elapsed_ms,
         )
         self.error = node_error
         report.failed_nodes += 1
@@ -259,6 +272,8 @@ class TreeNode[T]:
             "node_id": self.ref.id if self.ref else "root",
             "depth": self.depth,
             "status": status,
+            "attempts": self.attempts,
+            "elapsed_ms": self.elapsed_ms,
             "items_count": len(self.result.items) if self.result else 0,
             "children": [child.as_dict for child in self.children],
         }
