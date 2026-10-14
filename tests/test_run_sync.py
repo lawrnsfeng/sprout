@@ -13,6 +13,8 @@ from sprout import (
 
 _TOTAL_NODES = 4
 _MAX_DEPTH = 3
+_GRAND_TIMEOUT = 0.1
+_BLOCK_SECONDS = 0.5
 
 
 def _fetch(ref: ChildRef, depth: int) -> FetchResult[str]:
@@ -66,3 +68,25 @@ def test_run_sync_twice_on_one_executor() -> None:
         _tree, report = executor.run_sync(ChildRef(id="root"), depth=2)
         assert report.total_nodes == _TOTAL_NODES
         assert report.errors == []
+
+
+def test_run_sync_waits_for_blocking_fetch_after_timeout() -> None:
+    """Test the report is final at the timeout but run_sync joins the thread."""
+
+    def slow(_ref: ChildRef, _depth: int) -> FetchResult[str]:
+        """Block well past the grand timeout."""
+        time.sleep(_BLOCK_SECONDS)
+        return FetchResult()
+
+    executor = Executor[str](
+        fetcher=blocking_fetcher(slow),
+        config=ExecutorConfig(level_timeout=_GRAND_TIMEOUT),
+    )
+
+    start = time.monotonic()
+    _tree, report = executor.run_sync(ChildRef(id="root"), depth=1)
+    elapsed = time.monotonic() - start
+
+    assert report.timed_out is True
+    assert report.elapsed_ms < _BLOCK_SECONDS * 1000 / 2
+    assert elapsed >= _BLOCK_SECONDS * 0.9

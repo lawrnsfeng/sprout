@@ -232,3 +232,25 @@ async def test_expand_bounded_zero_children_mid_tree() -> None:
     for child in tree.children:
         assert child.result is not None
         assert len(child.children) == 0
+
+
+@pytest.mark.asyncio
+async def test_refs_below_depth_limit_are_dropped_without_an_error() -> None:
+    """Test empty errors does not mean the whole tree was fetched."""
+    discovered: list[str] = []
+
+    async def fetcher(ref: ChildRef, _depth: int) -> FetchResult[str]:
+        """Every node has one child."""
+        child = ChildRef(id=f"{ref.id}/child")
+        discovered.append(child.id)
+        return FetchResult(child_refs=[child])
+
+    executor = Executor[str](fetcher=fetcher)
+
+    tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert discovered == ["root/child"]
+    assert report.total_nodes == 1
+    assert report.errors == []
+    assert report.skipped_nodes == 0
+    assert tree.children == []

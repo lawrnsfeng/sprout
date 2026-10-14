@@ -54,8 +54,9 @@ def blocking_fetcher[T](
 
     Each call runs in a worker thread, so a fetcher built on a blocking
     client can be used unchanged. A blocking call cannot be interrupted: on
-    a timeout the traversal moves on, but the thread runs until the call
-    returns, so give the underlying client its own timeout.
+    a timeout the node is recorded and the report is final, but the thread
+    runs until the call returns, and the event loop does not shut down
+    before it has. Give the underlying client its own timeout.
 
     Args:
         fetch: Blocking function taking a node reference and its depth.
@@ -205,6 +206,10 @@ class Executor[T]:
 
         Starts its own event loop, so it cannot be called from inside a
         running one; await ``expand_bounded``/``expand_unbounded`` there.
+
+        With a ``blocking_fetcher``, this returns only once every worker
+        thread has finished, also after a timeout: a blocking call that is
+        still running cannot be interrupted.
 
         Args:
             root_ref: Reference to the root node.

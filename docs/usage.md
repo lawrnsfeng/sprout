@@ -76,10 +76,12 @@ executor = Executor[str](fetcher=fetch_dir, config=config)
 ```
 
 `level_timeout` budgets the whole traversal; `node_timeout` bounds a single
-fetch attempt. Without it, one hung fetch runs until the whole-traversal
-budget expires and takes every in-flight sibling down with it. With it, the
-hung attempt raises `TimeoutError`, goes through the normal retry policy,
-and the node fails on its own with `kind == "timeout"`.
+fetch attempt and must be greater than zero. Without it, one hung fetch runs
+until the whole-traversal budget expires and takes every in-flight sibling
+down with it. With it, the hung attempt raises `NodeTimeoutError` (a
+`TimeoutError`), goes through the normal retry policy, and the node fails on
+its own with `kind == "timeout"`. A `TimeoutError` your fetcher raises itself
+is still an ordinary `fetch_failed`.
 
 For app-wide settings objects, build the same config from a plain
 `SproutSettings` dataclass:
@@ -216,8 +218,10 @@ total = sum(len(node.result.items) for node in tree.subtree if node.result)
 print(f"total items: {total}")
 ```
 
-`report.errors` is empty exactly when every discovered ref was fetched, so
-it is the one check for "did anything go wrong".
+`report.errors` is empty when nothing failed, was cancelled or was skipped,
+so it is the one check for "did anything go wrong". It says nothing about
+depth: `expand_bounded` does not fetch the refs below its depth limit and
+does not report them either.
 
 Every node keeps its `ref`, its `result` or `error`, the `attempts` made
 and the `elapsed_ms` spent, so results join back to the inputs that produced
@@ -286,6 +290,9 @@ tree, report = executor.run_sync(ChildRef(id="."), depth=3)  # omit depth for un
 ```
 
 `run_sync` starts its own event loop, so call it from synchronous code only.
-A blocking call cannot be interrupted: after a timeout the traversal moves
-on, but the worker thread runs until the call returns. Give the underlying
-client its own timeout.
+
+A blocking call cannot be interrupted. When a timeout fires, the node is
+recorded as timed out or cancelled and the report is final, but the worker
+thread keeps running until the call returns, and `run_sync` itself returns
+only once every worker thread has finished. A fetch that never returns keeps
+`run_sync` from returning. Give the underlying client its own timeout.
