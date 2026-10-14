@@ -288,3 +288,31 @@ def test_tree_node_parent_link_does_not_recurse() -> None:
     as_dict = dataclasses.asdict(root)
     assert "parent" not in as_dict
     assert [c["ref"]["id"] for c in as_dict["children"]] == ["a", "b"]
+
+
+def test_tree_node_node_id() -> None:
+    """Test node_id is the ref ID, or "root" for a node without a ref."""
+    assert TreeNode[FileItem]().node_id == "root"
+    assert TreeNode[FileItem](ref=ChildRef(id="a")).node_id == "a"
+
+
+def test_mark_methods_record_the_nodes_own_state() -> None:
+    """Test mark_failed and mark_cancelled read path and attempts off the node."""
+    root = _sample_tree()
+    report = TraversalReport()
+
+    leaf = root.children[0].children[0]
+    leaf.attempts = _ATTEMPTS_THREE
+    leaf.elapsed_ms = 7
+    failed = leaf.mark_failed(ValueError("boom"), report, traceback=None)
+
+    assert failed.node_id == "a1"
+    assert failed.path == ["root", "a", "a1"]
+    assert failed.attempts == _ATTEMPTS_THREE
+    assert failed.elapsed_ms == leaf.elapsed_ms
+
+    cancelled = root.children[1].mark_cancelled(report)
+
+    assert cancelled.node_id == "b"
+    assert cancelled.path == ["root", "b"]
+    assert report.errors == [failed, cancelled]

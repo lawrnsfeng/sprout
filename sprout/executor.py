@@ -289,9 +289,7 @@ class Executor[T]:
 
                     if fetch_task.cancelled():
                         report.timed_out = report.timed_out or clock.is_cancelled
-                        self._hook_node_error(
-                            node.mark_cancelled(report, path=node.path),
-                        )
+                        self._hook_node_error(node.mark_cancelled(report))
                         continue
 
                     try:
@@ -339,7 +337,7 @@ class Executor[T]:
         await asyncio.gather(*live_tasks, return_exceptions=True)
         for task in list(live_tasks):
             node = node_map.pop(task)
-            self._hook_node_error(node.mark_cancelled(report, path=node.path))
+            self._hook_node_error(node.mark_cancelled(report))
         live_tasks.clear()
 
     def _handle_fetch_error(
@@ -359,9 +357,7 @@ class Executor[T]:
         node_error = node.mark_failed(
             exc,
             report,
-            attempts=node.attempts,
             traceback=_truncate_traceback(exc),
-            path=node.path,
         )
         self._hook_node_error(node_error)
 
@@ -387,7 +383,7 @@ class Executor[T]:
                 lambda t: t.exception() if not t.cancelled() else None,
             )
 
-        parent_id = node.ref.id if node.ref else "root"
+        parent_id = node.node_id
 
         if not fetch_result.child_refs:
             self._hook_node_complete(parent_id)
@@ -483,8 +479,6 @@ class Executor[T]:
             asyncio.CancelledError: If traversal is cancelled.
 
         """
-        node_id = node.ref.id if node.ref else "root"
-
         try:
             async with self._gate.acquire():
                 clock.check_cancelled()
@@ -497,7 +491,7 @@ class Executor[T]:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise FetcherError(node_id, exc) from exc
+            raise FetcherError(node.node_id, exc) from exc
 
     async def _fetch_once(
         self,

@@ -167,12 +167,17 @@ class TreeNode[T]:
         return self._parent
 
     @property
+    def node_id(self) -> str:
+        """Return this node's ID (``"root"`` for a node without a ref)."""
+        return self.ref.id if self.ref else "root"
+
+    @property
     def path(self) -> list[str]:
         """Return node IDs from the root down to this node."""
         path: list[str] = []
         node: TreeNode[T] | None = self
         while node is not None:
-            path.append(node.ref.id if node.ref else "root")
+            path.append(node.node_id)
             node = node.parent
         path.reverse()
         return path
@@ -203,12 +208,7 @@ class TreeNode[T]:
         self.children.append(child)
         return child
 
-    def mark_cancelled(
-        self,
-        report: TraversalReport,
-        *,
-        path: list[str],
-    ) -> NodeError:
+    def mark_cancelled(self, report: TraversalReport) -> NodeError:
         """Mark this node as partially cancelled and record it on report."""
         self.partial = True
         self.error = NodeError(
@@ -216,8 +216,8 @@ class TreeNode[T]:
             attempts=self.attempts,
             last_exception_type="CancelledError",
             last_exception_repr="Task cancelled",
-            node_id=self.ref.id if self.ref else "root",
-            path=path,
+            node_id=self.node_id,
+            path=self.path,
             elapsed_ms=self.elapsed_ms,
         )
         report.cancelled_nodes += 1
@@ -229,19 +229,17 @@ class TreeNode[T]:
         exc: Exception,
         report: TraversalReport,
         *,
-        attempts: int,
         traceback: str | None,
-        path: list[str],
     ) -> NodeError:
         """Attach failure info to this node and record it on the report."""
         node_error = NodeError(
             kind="timeout" if isinstance(exc, TimeoutError) else "fetch_failed",
-            attempts=attempts,
+            attempts=self.attempts,
             last_exception_type=type(exc).__name__,
             last_exception_repr=repr(exc),
             traceback=traceback,
-            node_id=self.ref.id if self.ref else "root",
-            path=path,
+            node_id=self.node_id,
+            path=self.path,
             elapsed_ms=self.elapsed_ms,
         )
         self.error = node_error
@@ -281,7 +279,7 @@ class TreeNode[T]:
             status = "pending"
 
         result: dict[str, object] = {
-            "node_id": self.ref.id if self.ref else "root",
+            "node_id": self.node_id,
             "depth": self.depth,
             "status": status,
             "attempts": self.attempts,
