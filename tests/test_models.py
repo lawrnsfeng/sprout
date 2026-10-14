@@ -279,8 +279,12 @@ def test_tree_node_path_and_parent() -> None:
 
 
 def test_tree_node_parent_link_does_not_recurse() -> None:
-    """Test the parent back-reference stays out of repr and equality."""
+    """Test the parent back-reference stays out of repr, eq and asdict."""
     root = _sample_tree()
 
     assert "parent" not in repr(root)
     assert root == _sample_tree()
+
+    as_dict = dataclasses.asdict(root)
+    assert "parent" not in as_dict
+    assert [c["ref"]["id"] for c in as_dict["children"]] == ["a", "b"]

@@ -138,7 +138,6 @@ class TreeNode[T]:
         error: Error info if this node failed (None on success).
         partial: True if this subtree was cancelled mid-traversal.
         depth: Depth of this node in the tree (0 for root).
-        parent: Node this one was spawned from (None for root).
         attempts: Number of fetch attempts made for this node.
         elapsed_ms: Time spent fetching this node, retries included, in
             milliseconds (0 if the fetch never started).
@@ -151,9 +150,21 @@ class TreeNode[T]:
     error: NodeError | None = None
     partial: bool = False
     depth: int = 0
-    parent: "TreeNode[T] | None" = field(default=None, repr=False, compare=False)
     attempts: int = 0
     elapsed_ms: int = 0
+
+    def __post_init__(self) -> None:
+        """Start without a parent; ``spawn_child`` links the two nodes.
+
+        The back-reference is not a dataclass field, so field-walking
+        helpers such as ``dataclasses.asdict`` do not follow it in a loop.
+        """
+        self._parent: TreeNode[T] | None = None
+
+    @property
+    def parent(self) -> "TreeNode[T] | None":
+        """Return the node this one was spawned from (None for root)."""
+        return self._parent
 
     @property
     def path(self) -> list[str]:
@@ -187,7 +198,8 @@ class TreeNode[T]:
 
     def spawn_child(self, ref: ChildRef) -> "TreeNode[T]":
         """Create a child node at this node's depth + 1 and attach it."""
-        child: TreeNode[T] = TreeNode(ref=ref, depth=self.depth + 1, parent=self)
+        child: TreeNode[T] = TreeNode(ref=ref, depth=self.depth + 1)
+        child._parent = self
         self.children.append(child)
         return child
 
