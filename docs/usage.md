@@ -83,6 +83,11 @@ down with it. With it, the hung attempt raises `NodeTimeoutError` (a
 its own with `kind == "timeout"`. A `TimeoutError` your fetcher raises itself
 is still an ordinary `fetch_failed`.
 
+Bad arguments fail when the `Executor` is built, not halfway through a crawl:
+a `node_timeout` of zero or less (or NaN), and an `on_node_error` or
+`on_duplicate` value that is not one of the documented ones, raise
+`InvalidParameterError`.
+
 For app-wide settings objects, build the same config from a plain
 `SproutSettings` dataclass:
 
@@ -103,7 +108,10 @@ Retries are powered by [tenacity](https://github.com/jd/tenacity) under the
 hood, but sprout stays HTTP-client-agnostic: you supply an `is_retryable`
 predicate deciding which exceptions deserve a retry, and an optional
 `retry_after_hook` that lets a rate-limited API's `Retry-After` value
-override the default exponential backoff.
+override the default exponential backoff. Sprout needs tenacity 9.2 or newer.
+
+Cancellation, `KeyboardInterrupt` and `SystemExit` are never retried,
+whatever `is_retryable` returns: they are not failures of the fetch.
 
 ```python
 from sprout import RetryConfig
@@ -164,6 +172,15 @@ except TraversalAbortedError as exc:
     print(f"aborted at {exc.node_id}: {exc.original_error!r}")
 ```
 
+A failed node's `NodeError.traceback` holds the formatted traceback. A long
+one is truncated to the innermost frames of each exception in the chain, so
+it still ends with the exception line, and for a node timeout it still shows
+the line the fetch was hanging on.
+
+Cancelling the traversal from outside, for example by wrapping it in
+`asyncio.wait_for`, cancels every fetch still in flight before the
+cancellation propagates to you.
+
 ## 6. Progress reporting
 
 Implement `ProgressHook` to drive a live CLI progress indicator or structured
@@ -209,7 +226,7 @@ print(report.as_dict)
 # {'total_nodes': ..., 'failed_nodes': ..., 'cancelled_nodes': ...,
 #  'skipped_nodes': ..., 'max_depth_seen': ..., 'elapsed_ms': ..., 'timed_out': ...}
 
-if report.errors:
+if report.has_failures:
     print("the crawl is incomplete")
 
 for node in tree.subtree:  # this node, then every descendant, pre-order
@@ -222,21 +239,35 @@ total = sum(len(node.result.items) for node in tree.subtree if node.result)
 print(f"total items: {total}")
 ```
 
-`report.errors` is empty when nothing failed, was cancelled or was skipped,
-so it is the one check for "did anything go wrong". It says nothing about
-depth: `expand_bounded` does not fetch the refs below its depth limit and
-does not report them either.
+`report.has_failures` is the one check for "did anything go wrong": it is
+true when any node failed, timed out, was cancelled or was skipped, which is
+exactly when `report.errors` is not empty. It says nothing about depth:
+`expand_bounded` does not fetch the refs below its depth limit and does not
+report them either. `report.timed_out` is narrower: the grand timeout cut
+unfinished work short.
 
-Every node keeps its `ref`, its `result` or `error`, the `attempts` made
-and the `elapsed_ms` spent, so results join back to the inputs that produced
-them without any ID conventions:
+`tree.outcomes` joins results back to the inputs that produced them, without
+any ID conventions. It maps each node ID to its `FetchResult`, or to its
+`NodeError` if the node failed, timed out or was cancelled:
 
 ```python
-by_id = {node.ref.id: node for node in tree.subtree}
+from sprout import NodeError
 
-node = by_id["./docs"]
-print(node.ref.payload, node.result, node.error, node.path)
+outcomes = tree.outcomes
+
+for ref in my_input_refs:
+    outcome = outcomes.get(ref.id)
+    if outcome is None:
+        print(f"{ref.id}: never reached")
+    elif isinstance(outcome, NodeError):
+        print(f"{ref.id}: {outcome.kind}")
+    else:
+        print(f"{ref.id}: {len(outcome.items)} items")
 ```
+
+For more than the outcome, walk `tree.subtree`: every node keeps its `ref`
+(payload included), its `result` or `error`, its `path`, the `attempts` made
+and the `elapsed_ms` spent.
 
 After a grand timeout, `attempts` tells the cancelled nodes apart: 0 means
 the fetch never started. For a node that had started, `elapsed_ms` says how
@@ -257,6 +288,13 @@ By default (`on_duplicate="skip_mark"`) each `ChildRef.id` is fetched once
 per traversal. A later sighting of the same ID, e.g. two parent directories
 symlinking to the same target, is recorded as a `duplicate_skipped` error
 rather than fetched again.
+
+The skipped ref is still in the tree: it is a child of the parent that
+returned it, with its `ref` and payload, the `duplicate_skipped` error and no
+result. So an ID can appear more than once in `tree.subtree`, and the tree
+can hold more nodes than `report.total_nodes`, which counts fetches.
+`tree.outcomes` leaves skipped nodes out, so a skipped ID maps to the fetch
+that did happen.
 
 Set `on_duplicate="allow"` when the same ID under two parents is two pieces
 of work, not one:

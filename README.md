@@ -66,7 +66,8 @@ Sprout also tunes concurrency, rate limits and per-node timeouts
 (`on_node_error`), duplicate-ref handling (`on_duplicate`), live progress and
 error hooks (`ProgressHook`), a synchronous entry point for blocking clients
 (`blocking_fetcher` + `Executor.run_sync`), and post-run inspection via
-`TraversalReport`, `TreeNode.subtree` and `TreeNode.dump_execution_graph`.
+`TraversalReport.has_failures`, `TreeNode.outcomes`, `TreeNode.subtree` and
+`TreeNode.dump_execution_graph`.
 One `Executor` can run several traversals, also concurrently on one event
 loop; it is not thread-safe. See the
 **[full usage guide](https://lawrnsfeng.github.io/sprout/usage/)** for a
