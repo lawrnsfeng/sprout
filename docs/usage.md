@@ -93,6 +93,10 @@ settings = SproutSettings(max_at_once=5, max_per_second=10.0)
 config = ExecutorConfig.from_settings(settings)
 ```
 
+One `Executor` can run any number of traversals, one after another or
+concurrently on one event loop. Each has its own dedup state, and they share
+the concurrency and rate limits. It is not thread-safe.
+
 ## 4. Retry tuning
 
 Retries are powered by [tenacity](https://github.com/jd/tenacity) under the
@@ -265,7 +269,9 @@ The same ID is then fetched under every parent that returns it. A ref that
 is its own ancestor is still skipped and recorded, so a cycle terminates.
 IDs are no longer unique in the tree. Nodes under different parents differ
 by `node.path`. If one parent returns the same ID twice, both are fetched and
-they share a path.
+they share a path. Progress hooks receive bare IDs, so the same ID can be
+discovered and completed more than once: count IDs, do not keep them in a
+set.
 On a graph with many shared nodes, `allow` fetches each one once per path
 that reaches it, so prefer `expand_bounded` there.
 
@@ -303,7 +309,9 @@ thread keeps running until the call returns. Two things follow:
   with a warning and holds up interpreter exit instead.
 - `node_timeout` frees the node's concurrency slot while its thread is still
   busy. More blocking calls than `max_at_once` can then run at once, and a
-  retry can issue the same call alongside the abandoned one.
+  retry can issue the same call alongside the abandoned one. Abandoned
+  threads also fill the thread pool; once it is full, healthy nodes time out
+  while waiting for a thread, without their fetch ever being called.
 
 So for a blocking client, set the client's own timeout and leave
 `node_timeout` unset.
