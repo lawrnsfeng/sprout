@@ -248,3 +248,39 @@ def test_traversal_report_with_data() -> None:
     assert report.total_nodes == _TOTAL_NODES
     assert report.skipped_nodes == _SKIPPED_NODES
     assert report.errors[0].node_id == "failed-node"
+
+
+def _sample_tree() -> TreeNode[FileItem]:
+    """Build root -> (a -> a1, b)."""
+    root: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="root"))
+    node_a = root.spawn_child(ChildRef(id="a"))
+    node_a.spawn_child(ChildRef(id="a1"))
+    root.spawn_child(ChildRef(id="b"))
+    return root
+
+
+def test_tree_node_subtree_is_pre_order() -> None:
+    """Test subtree yields the node itself, then descendants depth-first."""
+    root = _sample_tree()
+
+    assert [n.ref.id for n in root.subtree if n.ref] == ["root", "a", "a1", "b"]
+    assert [n.ref.id for n in root.children[0].subtree if n.ref] == ["a", "a1"]
+
+
+def test_tree_node_path_and_parent() -> None:
+    """Test path runs from the root down to the node via parent links."""
+    root = _sample_tree()
+    leaf = root.children[0].children[0]
+
+    assert root.parent is None
+    assert root.path == ["root"]
+    assert leaf.parent is root.children[0]
+    assert leaf.path == ["root", "a", "a1"]
+
+
+def test_tree_node_parent_link_does_not_recurse() -> None:
+    """Test the parent back-reference stays out of repr and equality."""
+    root = _sample_tree()
+
+    assert "parent" not in repr(root)
+    assert root == _sample_tree()

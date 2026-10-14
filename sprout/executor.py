@@ -101,7 +101,6 @@ class Executor[T]:
         self._level_timeout = cfg.level_timeout
         self._on_node_error = on_node_error
         self._progress_hook = progress_hook
-        self._parent_map: dict[str, str | None] = {}
         self._seen_refs: set[str] = set()
 
     async def expand_bounded(
@@ -155,7 +154,6 @@ class Executor[T]:
 
     def _reset_state(self) -> None:
         """Reset per-run mutable state."""
-        self._parent_map = {}
         self._seen_refs = set()
 
     async def _execute(
@@ -182,7 +180,6 @@ class Executor[T]:
         live_tasks: set[asyncio.Task[FetchResult[T]]] = set()
         node_map: dict[asyncio.Task[FetchResult[T]], TreeNode[T]] = {}
 
-        self._parent_map[root_ref.id] = None
         self._seen_refs.add(root_ref.id)
 
         timeout_task = asyncio.create_task(clock.wait_for_timeout())
@@ -225,7 +222,7 @@ class Executor[T]:
 
                     if fetch_task.cancelled():
                         report.timed_out = report.timed_out or clock.is_cancelled
-                        node.mark_cancelled(report, path=self._build_path(node))
+                        node.mark_cancelled(report, path=node.path)
                         continue
 
                     try:
@@ -269,7 +266,7 @@ class Executor[T]:
         await asyncio.gather(*live_tasks, return_exceptions=True)
         for task in list(live_tasks):
             node = node_map.pop(task)
-            node.mark_cancelled(report, path=self._build_path(node))
+            node.mark_cancelled(report, path=node.path)
         live_tasks.clear()
 
     async def _handle_fetch_error(
@@ -290,7 +287,7 @@ class Executor[T]:
             report,
             attempts=self._retry_config.max_attempts,
             traceback=_truncate_traceback(exc),
-            path=self._build_path(node),
+            path=node.path,
         )
 
         if self._on_node_error == "abort":
@@ -331,16 +328,13 @@ class Executor[T]:
             return
 
         spawned_ids: list[str] = []
+        path: list[str] | None = None
         for child_ref in fetch_result.child_refs:
             if child_ref.id in self._seen_refs:
-                node.record_duplicate_child(
-                    child_ref,
-                    ctx.report,
-                    path=self._build_path(node),
-                )
+                path = path or node.path
+                node.record_duplicate_child(child_ref, ctx.report, path=path)
                 continue
             self._seen_refs.add(child_ref.id)
-            self._parent_map[child_ref.id] = parent_id
 
             child_node = node.spawn_child(child_ref)
 
@@ -427,20 +421,3 @@ class Executor[T]:
             node.ref or ChildRef(id="root"),
             node.depth,
         )
-
-    def _build_path(self, node: "TreeNode[T]") -> list[str]:
-        """Build full ancestor path from root to this node.
-
-        Args:
-            node: Node to build path for.
-
-        Returns:
-            List of node IDs from root to this node.
-
-        """
-        path: list[str] = []
-        node_id: str | None = node.ref.id if node.ref else "root"
-        while node_id is not None:
-            path.insert(0, node_id)
-            node_id = self._parent_map.get(node_id)
-        return path

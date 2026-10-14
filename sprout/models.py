@@ -3,7 +3,10 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass(frozen=True)
@@ -129,6 +132,7 @@ class TreeNode[T]:
         error: Error info if this node failed (None on success).
         partial: True if this subtree was cancelled mid-traversal.
         depth: Depth of this node in the tree (0 for root).
+        parent: Node this one was spawned from (None for root).
 
     """
 
@@ -138,6 +142,27 @@ class TreeNode[T]:
     error: NodeError | None = None
     partial: bool = False
     depth: int = 0
+    parent: "TreeNode[T] | None" = field(default=None, repr=False, compare=False)
+
+    @property
+    def path(self) -> list[str]:
+        """Return node IDs from the root down to this node."""
+        path: list[str] = []
+        node: TreeNode[T] | None = self
+        while node is not None:
+            path.append(node.ref.id if node.ref else "root")
+            node = node.parent
+        path.reverse()
+        return path
+
+    @property
+    def subtree(self) -> "Iterator[TreeNode[T]]":
+        """Yield this node, then every descendant, depth-first pre-order."""
+        stack: list[TreeNode[T]] = [self]
+        while stack:
+            node = stack.pop()
+            yield node
+            stack.extend(reversed(node.children))
 
     def mark_fetched(
         self,
@@ -151,7 +176,7 @@ class TreeNode[T]:
 
     def spawn_child(self, ref: ChildRef) -> "TreeNode[T]":
         """Create a child node at this node's depth + 1 and attach it."""
-        child: TreeNode[T] = TreeNode(ref=ref, depth=self.depth + 1)
+        child: TreeNode[T] = TreeNode(ref=ref, depth=self.depth + 1, parent=self)
         self.children.append(child)
         return child
 
