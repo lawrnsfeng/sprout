@@ -34,8 +34,9 @@ class ExecutorConfig:
         max_per_second: Maximum fetches per second (0 = unlimited).
         level_timeout: Timeout budget per depth level in seconds.
         node_timeout: Timeout for one fetch attempt of one node in seconds
-            (None = no per-node timeout). A timed-out attempt raises
-            ``TimeoutError``, which is retried like any other failure.
+            (None = no per-node timeout; must be > 0 otherwise). A timed-out
+            attempt raises ``NodeTimeoutError``, which is retried like any
+            other failure.
 
     """
 

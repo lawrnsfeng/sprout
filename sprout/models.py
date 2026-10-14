@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from .exceptions import NodeTimeoutError
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -45,8 +47,8 @@ class NodeError:
 
     Attributes:
         kind: Type of error that occurred. ``timeout`` is a fetch that
-            raised ``TimeoutError``; ``cancelled`` is a node cut off by the
-            grand timeout.
+            exceeded the per-node timeout; ``cancelled`` is a node cut off
+            by the grand timeout.
         attempts: Number of fetch attempts made.
         last_exception_type: Type name of the last exception.
         last_exception_repr: String representation of the last exception.
@@ -233,7 +235,7 @@ class TreeNode[T]:
     ) -> NodeError:
         """Attach failure info to this node and record it on the report."""
         node_error = NodeError(
-            kind="timeout" if isinstance(exc, TimeoutError) else "fetch_failed",
+            kind="timeout" if isinstance(exc, NodeTimeoutError) else "fetch_failed",
             attempts=self.attempts,
             last_exception_type=type(exc).__name__,
             last_exception_repr=repr(exc),

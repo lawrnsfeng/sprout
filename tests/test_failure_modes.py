@@ -10,6 +10,8 @@ from sprout import (
     Executor,
     ExecutorConfig,
     FetchResult,
+    InvalidParameterError,
+    NodeTimeoutError,
     RetryConfig,
     TraversalAbortedError,
 )
@@ -381,7 +383,8 @@ async def test_node_timeout_fails_only_the_hung_node() -> None:
     error = report.errors[0]
     assert error.kind == "timeout"
     assert error.node_id == "hung"
-    assert error.last_exception_type == "TimeoutError"
+    assert error.last_exception_type == NodeTimeoutError.__name__
+    assert "hung" in error.last_exception_repr
     assert error.attempts == 1
     assert error.elapsed_ms >= _NODE_TIMEOUT_MS
     assert error.as_dict["elapsed_ms"] == error.elapsed_ms
@@ -503,3 +506,67 @@ async def test_attempts_not_inflated_by_cancelled_backoff() -> None:
     assert calls == 1
     assert report.errors[0].kind == "cancelled"
     assert report.errors[0].attempts == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("node_timeout", [None, 5.0])
+async def test_fetchers_own_timeout_error_is_a_plain_failure(
+    node_timeout: float | None,
+) -> None:
+    """Test a TimeoutError raised by the fetcher is not a node timeout."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Raise the client's own timeout."""
+        msg = "socket connect timed out"
+        raise TimeoutError(msg)
+
+    config = ExecutorConfig(retry_max_attempts=1, node_timeout=node_timeout)
+    executor = Executor[SampleItem](fetcher=fetcher, config=config)
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert report.errors[0].kind == "fetch_failed"
+    assert report.errors[0].last_exception_type == "TimeoutError"
+
+
+@pytest.mark.asyncio
+async def test_node_timeout_is_retried_as_a_timeout_error() -> None:
+    """Test a retry predicate for TimeoutError also retries node timeouts."""
+    calls = 0
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Hang on every attempt."""
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(10.0)
+        return FetchResult()
+
+    executor = Executor[SampleItem](
+        fetcher=fetcher,
+        config=ExecutorConfig(node_timeout=0.05),
+        retry_config=RetryConfig(
+            max_attempts=2,
+            min_wait=0.01,
+            is_retryable=lambda exc: isinstance(exc, TimeoutError),
+        ),
+    )
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert calls == report.errors[0].attempts == 2
+    assert report.errors[0].kind == "timeout"
+
+
+@pytest.mark.parametrize("node_timeout", [0, -1.0])
+def test_non_positive_node_timeout_is_rejected(node_timeout: float) -> None:
+    """Test node_timeout must be positive, as zero would fail every fetch."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Leaf fetcher."""
+        return FetchResult()
+
+    with pytest.raises(InvalidParameterError, match="node_timeout"):
+        Executor[SampleItem](
+            fetcher=fetcher,
+            config=ExecutorConfig(node_timeout=node_timeout),
+        )

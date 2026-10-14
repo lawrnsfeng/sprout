@@ -50,4 +50,6 @@
 
 ::: sprout.InvalidParameterError
 
+::: sprout.NodeTimeoutError
+
 ::: sprout.TraversalAbortedError

@@ -14,6 +14,7 @@ from .config import ExecutorConfig
 from .exceptions import (
     FetcherError,
     InvalidParameterError,
+    NodeTimeoutError,
     TraversalAbortedError,
 )
 from .models import (
@@ -128,6 +129,11 @@ class Executor[T]:
 
         """
         cfg = config or ExecutorConfig()
+        if cfg.node_timeout is not None and cfg.node_timeout <= 0:
+            raise InvalidParameterError(
+                param="node_timeout",
+                requirement="> 0 (or None for no per-node timeout)",
+            )
         self._fetcher = fetcher
         self._retry_config = retry_config or RetryConfig(
             max_attempts=cfg.retry_max_attempts,
@@ -508,13 +514,20 @@ class Executor[T]:
             Fetch result from the user-provided fetcher.
 
         Raises:
-            TimeoutError: If the attempt exceeds the per-node timeout.
+            NodeTimeoutError: If the attempt exceeds the per-node timeout.
 
         """
         clock.check_cancelled()
         node.attempts += 1
-        async with asyncio.timeout(self._node_timeout):
-            return await self._fetcher(
-                node.ref or ChildRef(id="root"),
-                node.depth,
-            )
+        deadline = asyncio.timeout(self._node_timeout)
+        try:
+            async with deadline:
+                return await self._fetcher(
+                    node.ref or ChildRef(id="root"),
+                    node.depth,
+                )
+        except TimeoutError as exc:
+            # A TimeoutError the fetcher raised itself is its own failure.
+            if self._node_timeout is None or not deadline.expired():
+                raise
+            raise NodeTimeoutError(node.node_id, self._node_timeout) from exc

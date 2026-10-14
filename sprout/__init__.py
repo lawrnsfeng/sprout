@@ -20,6 +20,7 @@ from .exceptions import (
     FetcherError,
     GrandTimeoutExceededError,
     InvalidParameterError,
+    NodeTimeoutError,
     SproutError,
     TraversalAbortedError,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "GrandTimeoutExceededError",
     "InvalidParameterError",
     "NodeError",
+    "NodeTimeoutError",
     "OnDuplicate",
     "OnNodeError",
     "ProgressHook",
