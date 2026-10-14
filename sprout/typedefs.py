@@ -34,6 +34,13 @@ class ProgressHook(Protocol):
     synchronously from the executor event loop — keep them fast and
     non-blocking. Exceptions raised inside hook methods are suppressed;
     they must not crash the executor.
+
+    A hook may also define the optional method
+    ``on_node_error(node_id: str, error: NodeError, /) -> None``. When
+    present it fires once for every ``NodeError`` added to
+    ``TraversalReport.errors``: failed, timed-out and cancelled nodes, and
+    skipped duplicates. A skipped duplicate was never announced through
+    ``on_children_discovered``.
     """
 
     def on_children_discovered(

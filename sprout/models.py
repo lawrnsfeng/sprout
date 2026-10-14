@@ -185,7 +185,7 @@ class TreeNode[T]:
         report: TraversalReport,
         *,
         path: list[str],
-    ) -> None:
+    ) -> NodeError:
         """Mark this node as partially cancelled and record it on report."""
         self.partial = True
         self.error = NodeError(
@@ -198,6 +198,7 @@ class TreeNode[T]:
         )
         report.cancelled_nodes += 1
         report.errors.append(self.error)
+        return self.error
 
     def mark_failed(
         self,
@@ -229,7 +230,7 @@ class TreeNode[T]:
         report: TraversalReport,
         *,
         path: list[str],
-    ) -> None:
+    ) -> NodeError:
         """Record a skipped duplicate child ref against this parent node."""
         node_error = NodeError(
             kind="duplicate_skipped",
@@ -241,6 +242,7 @@ class TreeNode[T]:
         )
         report.skipped_nodes += 1
         report.errors.append(node_error)
+        return node_error
 
     @property
     def as_dict(self) -> dict[str, object]:

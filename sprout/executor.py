@@ -17,6 +17,7 @@ from .exceptions import (
 from .models import (
     ChildRef,
     FetchResult,
+    NodeError,
     TraversalReport,
     TreeNode,
 )
@@ -88,8 +89,8 @@ class Executor[T]:
             on_node_error: Error handling policy.
             retry_config: Override retry configuration (uses config values
                 if None).
-            progress_hook: Optional hook called on child discovery and
-                leaf completion.
+            progress_hook: Optional hook called on child discovery, leaf
+                completion and, if it defines ``on_node_error``, node errors.
 
         """
         cfg = config or ExecutorConfig()
@@ -222,7 +223,9 @@ class Executor[T]:
 
                     if fetch_task.cancelled():
                         report.timed_out = report.timed_out or clock.is_cancelled
-                        node.mark_cancelled(report, path=node.path)
+                        self._hook_node_error(
+                            node.mark_cancelled(report, path=node.path),
+                        )
                         continue
 
                     try:
@@ -266,7 +269,7 @@ class Executor[T]:
         await asyncio.gather(*live_tasks, return_exceptions=True)
         for task in list(live_tasks):
             node = node_map.pop(task)
-            node.mark_cancelled(report, path=node.path)
+            self._hook_node_error(node.mark_cancelled(report, path=node.path))
         live_tasks.clear()
 
     async def _handle_fetch_error(
@@ -289,6 +292,7 @@ class Executor[T]:
             traceback=_truncate_traceback(exc),
             path=node.path,
         )
+        self._hook_node_error(node_error)
 
         if self._on_node_error == "abort":
             for task in live_tasks:
@@ -332,7 +336,9 @@ class Executor[T]:
         for child_ref in fetch_result.child_refs:
             if child_ref.id in self._seen_refs:
                 path = path or node.path
-                node.record_duplicate_child(child_ref, ctx.report, path=path)
+                self._hook_node_error(
+                    node.record_duplicate_child(child_ref, ctx.report, path=path),
+                )
                 continue
             self._seen_refs.add(child_ref.id)
 
@@ -368,6 +374,18 @@ class Executor[T]:
             return
         with contextlib.suppress(Exception):
             self._progress_hook.on_node_complete(node_id)
+
+    def _hook_node_error(self, error: NodeError) -> None:
+        """Call progress hook on_node_error, if the hook defines it.
+
+        The method is optional so hooks written before it existed keep
+        working. Suppresses any exception raised by the hook.
+        """
+        on_node_error = getattr(self._progress_hook, "on_node_error", None)
+        if on_node_error is None:
+            return
+        with contextlib.suppress(Exception):
+            on_node_error(error.node_id, error)
 
     def _create_fetch_task(
         self,
