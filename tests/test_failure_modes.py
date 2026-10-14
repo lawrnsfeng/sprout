@@ -1,7 +1,9 @@
 """Tests for Sprout executor failure modes."""
 
 import asyncio
+import math
 import time
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -16,6 +18,9 @@ from sprout import (
     TraversalAbortedError,
 )
 from sprout.clock import GrandClock
+
+if TYPE_CHECKING:
+    from sprout.typedefs import OnDuplicate, OnNodeError
 
 _SKIP_MARK_TOTAL = 3
 _ABORT_MAX_ELAPSED = 2.0
@@ -569,4 +574,57 @@ def test_non_positive_node_timeout_is_rejected(node_timeout: float) -> None:
         Executor[SampleItem](
             fetcher=fetcher,
             config=ExecutorConfig(node_timeout=node_timeout),
+        )
+
+
+@pytest.mark.asyncio
+async def test_second_cancellation_during_cleanup_leaks_nothing() -> None:
+    """Test cancelling again while fetches wind down still stops the clock."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Hang, and be slow to honour cancellation."""
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            await asyncio.sleep(_NODE_TIMEOUT)
+            raise
+        return FetchResult()
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+    traversal = asyncio.create_task(
+        executor.expand_bounded(ChildRef(id="root"), depth=1),
+    )
+
+    await asyncio.sleep(_NODE_TIMEOUT / 2)
+    traversal.cancel()
+    await asyncio.sleep(_NODE_TIMEOUT / 2)
+    traversal.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await traversal
+    await asyncio.sleep(_NODE_TIMEOUT * 2)
+
+    assert asyncio.all_tasks() == {asyncio.current_task()}
+
+
+def test_invalid_executor_arguments_are_rejected() -> None:
+    """Test a misspelt policy or a NaN timeout fails at construction."""
+
+    async def fetcher(_ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Leaf fetcher."""
+        return FetchResult()
+
+    with pytest.raises(InvalidParameterError, match="on_duplicate"):
+        Executor[SampleItem](
+            fetcher=fetcher,
+            on_duplicate=cast("OnDuplicate", "Allow"),
+        )
+    with pytest.raises(InvalidParameterError, match="on_node_error"):
+        Executor[SampleItem](
+            fetcher=fetcher,
+            on_node_error=cast("OnNodeError", "ignore"),
+        )
+    with pytest.raises(InvalidParameterError, match="node_timeout"):
+        Executor[SampleItem](
+            fetcher=fetcher,
+            config=ExecutorConfig(node_timeout=math.nan),
         )

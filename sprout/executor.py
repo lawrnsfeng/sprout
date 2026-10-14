@@ -2,11 +2,12 @@
 
 import asyncio
 import contextlib
+import math
 import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import cast, get_args
 
 from .clock import DynamicClock, GrandClock, StaticClock
 from .concurrency import ConcurrencyGate
@@ -53,10 +54,14 @@ def blocking_fetcher[T](
     """Adapt a blocking fetch function to the async ``Fetcher`` protocol.
 
     Each call runs in a worker thread, so a fetcher built on a blocking
-    client can be used unchanged. A blocking call cannot be interrupted: on
-    a timeout the node is recorded and the report is final, but the thread
-    runs until the call returns, and the event loop does not shut down
-    before it has. Give the underlying client its own timeout.
+    client can be used unchanged.
+
+    A blocking call cannot be interrupted: on a timeout the node is recorded
+    and the report is final, but the thread runs until the call returns.
+    ``node_timeout`` therefore frees a concurrency slot while its thread is
+    still busy, so more calls than ``max_at_once`` can run at once and a
+    retry can overlap the abandoned call. Give the underlying client its own
+    timeout and leave ``node_timeout`` unset.
 
     Args:
         fetch: Blocking function taking a node reference and its depth.
@@ -130,7 +135,18 @@ class Executor[T]:
 
         """
         cfg = config or ExecutorConfig()
-        if cfg.node_timeout is not None and cfg.node_timeout <= 0:
+        for param, value, allowed in (
+            ("on_node_error", on_node_error, get_args(OnNodeError)),
+            ("on_duplicate", on_duplicate, get_args(OnDuplicate)),
+        ):
+            if value not in allowed:
+                raise InvalidParameterError(
+                    param=param,
+                    requirement=f"one of {allowed}",
+                )
+        if cfg.node_timeout is not None and (
+            math.isnan(cfg.node_timeout) or cfg.node_timeout <= 0
+        ):
             raise InvalidParameterError(
                 param="node_timeout",
                 requirement="> 0 (or None for no per-node timeout)",
@@ -141,6 +157,7 @@ class Executor[T]:
         )
         self._gate_limits = (cfg.max_at_once, cfg.max_per_second)
         self._gate = ConcurrencyGate(*self._gate_limits)
+        self._gate_loop: asyncio.AbstractEventLoop | None = None
         self._level_timeout = cfg.level_timeout
         self._node_timeout = cfg.node_timeout
         self._on_node_error = on_node_error
@@ -207,9 +224,10 @@ class Executor[T]:
         Starts its own event loop, so it cannot be called from inside a
         running one; await ``expand_bounded``/``expand_unbounded`` there.
 
-        With a ``blocking_fetcher``, this returns only once every worker
-        thread has finished, also after a timeout: a blocking call that is
-        still running cannot be interrupted.
+        With a ``blocking_fetcher``, this waits for the worker threads
+        before returning, also after a timeout: a blocking call that is
+        still running cannot be interrupted. asyncio caps that wait at five
+        minutes.
 
         Args:
             root_ref: Reference to the root node.
@@ -223,15 +241,29 @@ class Executor[T]:
             TraversalAbortedError: If on_node_error="abort" and a node fails.
 
         """
-        # Each asyncio.run() has its own loop, and the gate's asyncio
-        # primitives stay bound to the loop they first waited on.
-        self._gate = ConcurrencyGate(*self._gate_limits)
-        if depth is None:
-            return asyncio.run(self.expand_unbounded(root_ref))
-        return asyncio.run(self.expand_bounded(root_ref, depth))
+        traversal = (
+            self.expand_unbounded(root_ref)
+            if depth is None
+            else self.expand_bounded(root_ref, depth)
+        )
+        try:
+            return asyncio.run(traversal)
+        finally:
+            # Never started if asyncio.run() refused a running loop.
+            traversal.close()
 
     def _reset_state(self) -> None:
-        """Reset per-run mutable state."""
+        """Reset per-run mutable state.
+
+        The gate is rebuilt only when the running event loop changed: its
+        asyncio primitives stay bound to the loop they first waited on.
+        Within one loop it is kept, so rate-limit state carries across
+        traversals.
+        """
+        loop = asyncio.get_running_loop()
+        if loop is not self._gate_loop:
+            self._gate = ConcurrencyGate(*self._gate_limits)
+            self._gate_loop = loop
         self._seen_refs = set()
 
     async def _execute(
@@ -323,12 +355,12 @@ class Executor[T]:
         finally:
             # Anything still mapped was not handled: the traversal aborted or
             # its caller cancelled it. Do not leave those fetches running.
+            # Cancel all of them before waiting, so a second cancellation
+            # arriving during the wait leaves nothing running.
+            timeout_task.cancel()
             for task in node_map:
                 task.cancel()
-            await asyncio.gather(*node_map, return_exceptions=True)
-            timeout_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await timeout_task
+            await asyncio.gather(timeout_task, *node_map, return_exceptions=True)
 
         report.elapsed_ms = clock.elapsed_ms
         return root_node, report
