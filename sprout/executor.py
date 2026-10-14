@@ -297,11 +297,10 @@ class Executor[T]:
                     try:
                         fetch_result = fetch_task.result()
                     except FetcherError as fetcher_err:
-                        await self._handle_fetch_error(
+                        self._handle_fetch_error(
                             node,
                             fetcher_err.original_error,
                             report,
-                            live_tasks,
                         )
                     else:
                         self._handle_success_and_spawn_children(
@@ -313,6 +312,11 @@ class Executor[T]:
                 if timeout_task in done:
                     await self._handle_timeout(report, live_tasks, node_map)
         finally:
+            # Anything still mapped was not handled: the traversal aborted or
+            # its caller cancelled it. Do not leave those fetches running.
+            for task in node_map:
+                task.cancel()
+            await asyncio.gather(*node_map, return_exceptions=True)
             timeout_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await timeout_task
@@ -338,14 +342,15 @@ class Executor[T]:
             self._hook_node_error(node.mark_cancelled(report, path=node.path))
         live_tasks.clear()
 
-    async def _handle_fetch_error(
+    def _handle_fetch_error(
         self,
         node: "TreeNode[T]",
         exc: Exception,
         report: TraversalReport,
-        live_tasks: set[asyncio.Task[FetchResult[T]]],
     ) -> None:
         """Handle fetch error — skip_mark or abort depending on policy.
+
+        On abort the caller's cleanup cancels the fetches still in flight.
 
         Raises:
             TraversalAbortedError: If on_node_error="abort".
@@ -361,10 +366,6 @@ class Executor[T]:
         self._hook_node_error(node_error)
 
         if self._on_node_error == "abort":
-            for task in live_tasks:
-                task.cancel()
-            await asyncio.gather(*live_tasks, return_exceptions=True)
-            live_tasks.clear()
             raise TraversalAbortedError(
                 message=(f"Traversal aborted due to error at node {node_error.node_id}"),
                 node_id=node_error.node_id,

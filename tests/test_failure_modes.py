@@ -452,3 +452,29 @@ async def test_fetch_starting_after_clock_expiry_is_marked_cancelled() -> None:
     late = tree.children[0]
     assert late.error is not None
     assert (late.error.kind, late.error.attempts) == ("cancelled", 0)
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_stops_in_flight_fetches() -> None:
+    """Test cancelling the traversal cancels its fetches, leaving no tasks."""
+    cancelled: list[str] = []
+
+    async def fetcher(ref: ChildRef, _depth: int) -> FetchResult[SampleItem]:
+        """Hang until cancelled."""
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            cancelled.append(ref.id)
+            raise
+        return FetchResult()
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            executor.expand_bounded(ChildRef(id="root"), depth=1),
+            _NODE_TIMEOUT,
+        )
+
+    assert cancelled == ["root"]
+    assert asyncio.all_tasks() == {asyncio.current_task()}
