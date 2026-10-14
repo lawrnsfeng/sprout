@@ -47,8 +47,10 @@ class NodeError:
 
     Attributes:
         kind: Type of error that occurred. ``timeout`` is a fetch that
-            exceeded the per-node timeout; ``cancelled`` is a node cut off
-            by the grand timeout.
+            exceeded the per-node timeout. ``cancelled`` is a fetch that
+            ended cancelled: by the grand timeout when
+            ``TraversalReport.timed_out`` is set, otherwise from inside the
+            fetcher, for example by a task it was awaiting.
         attempts: Number of fetch attempts made.
         last_exception_type: Type name of the last exception.
         last_exception_repr: String representation of the last exception.
@@ -156,14 +158,19 @@ class TreeNode[T]:
     elapsed_ms: int = 0
 
     def __post_init__(self) -> None:
-        """Start without a parent and adopt any children passed in.
+        """Start without a parent and adopt parentless children passed in.
+
+        A child that already has a parent keeps it, so a shallow copy made
+        with ``dataclasses.replace`` does not take the children away from
+        the tree they belong to.
 
         The back-reference is not a dataclass field, so field-walking
         helpers such as ``dataclasses.asdict`` do not follow it in a loop.
         """
         self._parent: TreeNode[T] | None = None
         for child in self.children:
-            child._parent = self  # noqa: SLF001 - another instance of this class
+            if child.parent is None:
+                child._parent = self  # noqa: SLF001 - another instance of this class
 
     @property
     def parent(self) -> "TreeNode[T] | None":

@@ -319,14 +319,21 @@ def test_mark_methods_record_the_nodes_own_state() -> None:
 
 
 def test_tree_node_adopts_children_given_to_the_constructor() -> None:
-    """Test children passed in directly, or through replace, get a parent."""
+    """Test parentless children passed to the constructor get a parent."""
     child: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="c"))
     node: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="r"), children=[child])
 
     assert child.parent is node
     assert child.path == ["r", "c"]
 
-    copy = dataclasses.replace(node)
+
+def test_replace_does_not_take_children_from_the_original_tree() -> None:
+    """Test a shallow copy leaves the original tree's parent links alone."""
+    root = _sample_tree()
+    node_a = root.children[0]
+
+    copy = dataclasses.replace(node_a, error=None)
 
     assert copy.parent is None
-    assert copy.children[0].parent is copy
+    assert node_a.children[0].parent is node_a
+    assert node_a.children[0].path == ["root", "a", "a1"]
