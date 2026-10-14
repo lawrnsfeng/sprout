@@ -9,6 +9,7 @@ from sprout import (
     Executor,
     ExecutorConfig,
     FetchResult,
+    NodeError,
     ProgressHook,
 )
 from sprout.exceptions import TraversalAbortedError
@@ -45,6 +46,29 @@ class _TrackingHook:
     def on_node_complete(self, node_id: str, /) -> None:
         """Record a node-complete event."""
         self.completed.append(node_id)
+
+
+class _ErrorTrackingHook(_TrackingHook):
+    """Tracking hook that also records node errors."""
+
+    def __init__(self) -> None:
+        """Initialize empty tracking lists."""
+        super().__init__()
+        self.errors: list[NodeError] = []
+
+    def on_node_error(self, node_id: str, error: NodeError, /) -> None:
+        """Record a node-error event."""
+        assert node_id == error.node_id
+        self.errors.append(error)
+
+
+class _RaisingErrorHook(_TrackingHook):
+    """Hook whose error method raises — must not crash executor."""
+
+    def on_node_error(self, _node_id: str, _error: NodeError, /) -> None:
+        """Raise unconditionally."""
+        msg = "hook exploded on error"
+        raise RuntimeError(msg)
 
 
 class _RaisingHook:
@@ -267,3 +291,109 @@ async def test_dedup_skipped_nodes_do_not_fire_complete_twice() -> None:
     await executor.expand_bounded(ChildRef(id="root"), depth=2)
 
     assert hook.completed.count("dup") == 1
+
+
+async def _failing_tree(
+    ref: ChildRef,
+    depth: int,
+    /,
+) -> FetchResult[SampleItem]:
+    """Root returns a failing child, a duplicate pair and a good child."""
+    if depth == 0:
+        return FetchResult(
+            child_refs=[
+                ChildRef(id="bad"),
+                ChildRef(id="dup"),
+                ChildRef(id="dup"),
+            ],
+        )
+    if ref.id == "bad":
+        msg = "fetch failed"
+        raise ValueError(msg)
+    return FetchResult()
+
+
+@pytest.mark.asyncio
+async def test_error_hook_mirrors_report_errors() -> None:
+    """on_node_error fires once for each failed node and skipped duplicate."""
+    hook = _ErrorTrackingHook()
+
+    executor = _make_executor(_failing_tree, hook=hook)
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert {e.kind for e in hook.errors} == {"fetch_failed", "duplicate_skipped"}
+    assert hook.errors == report.errors
+    assert hook.completed == ["dup"]
+
+
+@pytest.mark.asyncio
+async def test_error_hook_fires_for_cancelled_nodes() -> None:
+    """on_node_error fires for nodes cancelled by the grand timeout."""
+    hook = _ErrorTrackingHook()
+
+    async def fetcher(
+        _ref: ChildRef,
+        depth: int,
+        /,
+    ) -> FetchResult[SampleItem]:
+        """Root returns a slow child that hangs until cancelled."""
+        if depth == 0:
+            return FetchResult(child_refs=[ChildRef(id="slow")])
+        await asyncio.sleep(10)
+        return FetchResult()
+
+    executor = _make_executor(fetcher, hook=hook, timeout=_FAST_TIMEOUT)
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert [(e.node_id, e.kind) for e in hook.errors] == [("slow", "cancelled")]
+    assert hook.errors == report.errors
+
+
+@pytest.mark.asyncio
+async def test_hook_without_error_method_still_works() -> None:
+    """A hook that predates on_node_error is not called for errors."""
+    hook = _TrackingHook()
+
+    executor = _make_executor(_failing_tree, hook=hook)
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert report.failed_nodes == 1
+    assert hook.completed == ["dup"]
+
+
+@pytest.mark.asyncio
+async def test_raising_error_hook_does_not_crash_executor() -> None:
+    """on_node_error raising must not propagate."""
+    executor = _make_executor(_failing_tree, hook=_RaisingErrorHook())
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert report.failed_nodes == 1
+    assert report.skipped_nodes == 1
+
+
+@pytest.mark.asyncio
+async def test_hook_sees_repeated_ids_when_duplicates_are_allowed() -> None:
+    """Under on_duplicate="allow" the same ID is announced once per fetch."""
+    hook = _TrackingHook()
+
+    async def fetcher(
+        ref: ChildRef,
+        _depth: int,
+        /,
+    ) -> FetchResult[SampleItem]:
+        """Two branches both return the same child."""
+        if ref.id == "root":
+            return FetchResult(child_refs=[ChildRef(id="a"), ChildRef(id="b")])
+        if ref.id in ("a", "b"):
+            return FetchResult(child_refs=[ChildRef(id="shared")])
+        return FetchResult()
+
+    executor = Executor[SampleItem](
+        fetcher=fetcher,
+        on_duplicate="allow",
+        progress_hook=hook,
+    )
+    await executor.expand_bounded(ChildRef(id="root"), depth=3)
+
+    discovered = [cid for _parent, ids in hook.discovered for cid in ids]
+    assert discovered.count("shared") == hook.completed.count("shared") == 2

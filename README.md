@@ -60,11 +60,16 @@ known upfront (arbitrarily nested folders, comment threads, org charts), use
 `expand_unbounded` instead — its timeout budget grows automatically as deeper
 levels are discovered.
 
-Sprout also tunes concurrency and rate limits (`ExecutorConfig`), retry
-behavior including `Retry-After`-aware backoff (`RetryConfig`), fail-fast vs.
-skip-and-continue error policies (`on_node_error`), live progress hooks
-(`ProgressHook`), and post-run inspection via `TraversalReport` and
-`TreeNode.dump_execution_graph`. See the
+Sprout also tunes concurrency, rate limits and per-node timeouts
+(`ExecutorConfig`), retry behavior including `Retry-After`-aware backoff
+(`RetryConfig`), fail-fast vs. skip-and-continue error policies
+(`on_node_error`), duplicate-ref handling (`on_duplicate`), live progress and
+error hooks (`ProgressHook`), a synchronous entry point for blocking clients
+(`blocking_fetcher` + `Executor.run_sync`), and post-run inspection via
+`TraversalReport.has_failures`, `TreeNode.outcomes`, `TreeNode.subtree` and
+`TreeNode.dump_execution_graph`.
+One `Executor` can run several traversals, also concurrently on one event
+loop; it is not thread-safe. See the
 **[full usage guide](https://lawrnsfeng.github.io/sprout/usage/)** for a
 worked example of every feature, and the
 **[API reference](https://lawrnsfeng.github.io/sprout/api/)** for exact

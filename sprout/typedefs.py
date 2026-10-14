@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 OnNodeError = Literal["skip_mark", "abort"]
 
+OnDuplicate = Literal["skip_mark", "allow"]
+
 
 class Fetcher[T](Protocol):
     """Protocol for fetching child items from a node.
@@ -34,6 +36,17 @@ class ProgressHook(Protocol):
     synchronously from the executor event loop — keep them fast and
     non-blocking. Exceptions raised inside hook methods are suppressed;
     they must not crash the executor.
+
+    A hook may also define the optional method
+    ``on_node_error(node_id: str, error: NodeError, /) -> None``. When
+    present it fires once for every ``NodeError`` added to
+    ``TraversalReport.errors``: failed, timed-out and cancelled nodes, and
+    skipped duplicates. A skipped duplicate was never announced through
+    ``on_children_discovered``.
+
+    Hooks receive bare node IDs. With ``on_duplicate="allow"`` the same ID
+    can be discovered and completed more than once, so a hook that tracks
+    pending work must count IDs rather than keep them in a set.
     """
 
     def on_children_discovered(

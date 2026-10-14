@@ -20,10 +20,11 @@ from .exceptions import (
     FetcherError,
     GrandTimeoutExceededError,
     InvalidParameterError,
+    NodeTimeoutError,
     SproutError,
     TraversalAbortedError,
 )
-from .executor import Executor
+from .executor import Executor, blocking_fetcher
 from .models import (
     ChildRef,
     FetchResult,
@@ -34,6 +35,7 @@ from .models import (
 from .retry import RetryConfig
 from .typedefs import (
     Fetcher,
+    OnDuplicate,
     OnNodeError,
     ProgressHook,
     RetryAfterHook,
@@ -50,6 +52,8 @@ __all__ = [
     "GrandTimeoutExceededError",
     "InvalidParameterError",
     "NodeError",
+    "NodeTimeoutError",
+    "OnDuplicate",
     "OnNodeError",
     "ProgressHook",
     "RetryAfterHook",
@@ -61,4 +65,5 @@ __all__ = [
     "TraversalReport",
     "TreeNode",
     "__version__",
+    "blocking_fetcher",
 ]

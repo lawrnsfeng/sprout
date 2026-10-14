@@ -1,6 +1,8 @@
 """Tests for Sprout retry module."""
 
+import asyncio
 import time
+import warnings
 
 import pytest
 
@@ -55,6 +57,13 @@ def test_as_retrying_creates_instance() -> None:
     config = RetryConfig(max_attempts=_CUSTOM_MAX_ATTEMPTS)
     retrying = config.as_retrying()
     assert retrying is not None
+
+
+def test_as_retrying_emits_no_warnings() -> None:
+    """Test building the retry strategy uses no deprecated tenacity API."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        RetryConfig().as_retrying()
 
 
 @pytest.mark.asyncio
@@ -203,3 +212,43 @@ async def test_retry_with_retry_after_hook() -> None:
 
     assert result == "done"
     assert call_count == _RETRY_ATTEMPTS_3
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_is_never_retried() -> None:
+    """Test cancellation propagates at once, even with the retry-all default."""
+    calls = 0
+
+    async def cancelled() -> None:
+        nonlocal calls
+        calls += 1
+        raise asyncio.CancelledError
+
+    retrying = RetryConfig(max_attempts=_RETRY_ATTEMPTS_3).as_retrying()
+
+    with pytest.raises(asyncio.CancelledError):
+        await retrying(cancelled)
+
+    assert calls == 1
+
+
+class _StopEverything(BaseException):
+    """Stand-in for KeyboardInterrupt and SystemExit."""
+
+
+@pytest.mark.asyncio
+async def test_non_exception_errors_are_never_retried() -> None:
+    """Test a BaseException outside Exception propagates at once."""
+    calls = 0
+
+    async def interrupted() -> None:
+        nonlocal calls
+        calls += 1
+        raise _StopEverything
+
+    retrying = RetryConfig(max_attempts=_RETRY_ATTEMPTS_3).as_retrying()
+
+    with pytest.raises(_StopEverything):
+        await retrying(interrupted)
+
+    assert calls == 1

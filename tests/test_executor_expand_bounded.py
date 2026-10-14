@@ -10,6 +10,7 @@ from sprout import (
     Executor,
     ExecutorConfig,
     FetchResult,
+    NodeError,
 )
 
 _SINGLE_LEVEL_CHILDREN = 2
@@ -232,3 +233,76 @@ async def test_expand_bounded_zero_children_mid_tree() -> None:
     for child in tree.children:
         assert child.result is not None
         assert len(child.children) == 0
+
+
+@pytest.mark.asyncio
+async def test_refs_below_depth_limit_are_dropped_without_an_error() -> None:
+    """Test empty errors does not mean the whole tree was fetched."""
+    discovered: list[str] = []
+
+    async def fetcher(ref: ChildRef, _depth: int) -> FetchResult[str]:
+        """Every node has one child."""
+        child = ChildRef(id=f"{ref.id}/child")
+        discovered.append(child.id)
+        return FetchResult(child_refs=[child])
+
+    executor = Executor[str](fetcher=fetcher)
+
+    tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=1)
+
+    assert discovered == ["root/child"]
+    assert report.total_nodes == 1
+    assert report.errors == []
+    assert report.skipped_nodes == 0
+    assert tree.children == []
+
+
+@pytest.mark.asyncio
+async def test_outcomes_joins_every_input_ref_to_its_outcome() -> None:
+    """Test one lookup per input ref gives its result or its error."""
+    inputs = [ChildRef(id="ok"), ChildRef(id="bad"), ChildRef(id="ok")]
+
+    async def fetcher(ref: ChildRef, depth: int) -> FetchResult[str]:
+        """Root returns the inputs; one of them fails."""
+        if depth == 0:
+            return FetchResult(child_refs=inputs)
+        if ref.id == "bad":
+            msg = "boom"
+            raise RuntimeError(msg)
+        return FetchResult(items=[f"item-{ref.id}"])
+
+    executor = Executor[str](
+        fetcher=fetcher,
+        config=ExecutorConfig(retry_max_attempts=1),
+    )
+
+    tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    outcomes = tree.outcomes
+    joined = [outcomes.get(ref.id) for ref in inputs]
+
+    ok, bad, ok_again = joined
+    assert isinstance(ok, FetchResult)
+    assert ok.items == ["item-ok"]
+    assert ok_again is ok
+    assert isinstance(bad, NodeError)
+    assert bad.kind == "fetch_failed"
+    assert outcomes.get("never-seen") is None
+    assert report.has_failures is True
+
+
+@pytest.mark.asyncio
+async def test_has_failures_is_false_for_a_clean_run() -> None:
+    """Test a traversal with nothing failed, cancelled or skipped is clean."""
+
+    async def fetcher(_ref: ChildRef, depth: int) -> FetchResult[str]:
+        """Root has one leaf child."""
+        if depth == 0:
+            return FetchResult(child_refs=[ChildRef(id="leaf")])
+        return FetchResult()
+
+    executor = Executor[str](fetcher=fetcher)
+
+    _tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    assert report.has_failures is False

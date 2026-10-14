@@ -68,7 +68,8 @@ class RetryConfig:
         max_attempts: Maximum number of retry attempts.
         min_wait: Minimum wait between retries in seconds.
         max_wait: Maximum wait between retries in seconds.
-        jitter_pct: Jitter percentage for exponential backoff (±).
+        jitter_pct: Maximum random jitter added to each wait, in seconds
+            (not a percentage, despite the name).
         is_retryable: Predicate determining if an exception is retryable.
         retry_after_hook: Optional hook extracting wait duration
             from exceptions.
@@ -92,7 +93,7 @@ class RetryConfig:
 
         """
         base_wait: wait_base = wait_exponential_jitter(
-            initial=self.min_wait,
+            multiplier=self.min_wait,
             max=self.max_wait,
             jitter=self.jitter_pct,
         )
@@ -100,6 +101,14 @@ class RetryConfig:
         return AsyncRetrying(
             stop=stop_after_attempt(self.max_attempts),
             wait=wait,
-            retry=retry_if_exception(self.is_retryable),
+            retry=retry_if_exception(self._should_retry),
             reraise=True,
         )
+
+    def _should_retry(self, exc: BaseException) -> bool:
+        """Retry only ordinary errors that ``is_retryable`` accepts.
+
+        Cancellation, ``KeyboardInterrupt`` and ``SystemExit`` are not
+        ``Exception`` subclasses and always propagate at once.
+        """
+        return isinstance(exc, Exception) and self.is_retryable(exc)

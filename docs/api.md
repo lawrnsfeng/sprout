@@ -4,6 +4,8 @@
 
 ::: sprout.Executor
 
+::: sprout.blocking_fetcher
+
 ## Configuration
 
 ::: sprout.ExecutorConfig
@@ -32,6 +34,8 @@
 
 ::: sprout.OnNodeError
 
+::: sprout.OnDuplicate
+
 ::: sprout.RetryPredicate
 
 ::: sprout.RetryAfterHook
@@ -45,5 +49,7 @@
 ::: sprout.GrandTimeoutExceededError
 
 ::: sprout.InvalidParameterError
+
+::: sprout.NodeTimeoutError
 
 ::: sprout.TraversalAbortedError

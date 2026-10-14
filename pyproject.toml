@@ -5,7 +5,7 @@ description = "Async recursive tree traversal framework with retry, concurrency 
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "tenacity>=9.0.0",
+    "tenacity>=9.2.0",
 ]
 
 [dependency-groups]

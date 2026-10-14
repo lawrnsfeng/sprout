@@ -248,3 +248,162 @@ def test_traversal_report_with_data() -> None:
     assert report.total_nodes == _TOTAL_NODES
     assert report.skipped_nodes == _SKIPPED_NODES
     assert report.errors[0].node_id == "failed-node"
+
+
+def _sample_tree() -> TreeNode[FileItem]:
+    """Build root -> (a -> a1, b)."""
+    root: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="root"))
+    node_a = root.spawn_child(ChildRef(id="a"))
+    node_a.spawn_child(ChildRef(id="a1"))
+    root.spawn_child(ChildRef(id="b"))
+    return root
+
+
+def test_tree_node_subtree_is_pre_order() -> None:
+    """Test subtree yields the node itself, then descendants depth-first."""
+    root = _sample_tree()
+
+    assert [n.ref.id for n in root.subtree if n.ref] == ["root", "a", "a1", "b"]
+    assert [n.ref.id for n in root.children[0].subtree if n.ref] == ["a", "a1"]
+
+
+def test_tree_node_path_and_parent() -> None:
+    """Test path runs from the root down to the node via parent links."""
+    root = _sample_tree()
+    leaf = root.children[0].children[0]
+
+    assert root.parent is None
+    assert root.path == ["root"]
+    assert leaf.parent is root.children[0]
+    assert leaf.path == ["root", "a", "a1"]
+
+
+def test_tree_node_parent_link_does_not_recurse() -> None:
+    """Test the parent back-reference stays out of repr, eq and asdict."""
+    root = _sample_tree()
+
+    assert "parent" not in repr(root)
+    assert root == _sample_tree()
+
+    as_dict = dataclasses.asdict(root)
+    assert "parent" not in as_dict
+    assert [c["ref"]["id"] for c in as_dict["children"]] == ["a", "b"]
+
+
+def test_tree_node_node_id() -> None:
+    """Test node_id is the ref ID, or "root" for a node without a ref."""
+    assert TreeNode[FileItem]().node_id == "root"
+    assert TreeNode[FileItem](ref=ChildRef(id="a")).node_id == "a"
+
+
+def test_mark_methods_record_the_nodes_own_state() -> None:
+    """Test mark_failed and mark_cancelled read path and attempts off the node."""
+    root = _sample_tree()
+    report = TraversalReport()
+
+    leaf = root.children[0].children[0]
+    leaf.attempts = _ATTEMPTS_THREE
+    leaf.elapsed_ms = 7
+    failed = leaf.mark_failed(ValueError("boom"), report, traceback=None)
+
+    assert failed.node_id == "a1"
+    assert failed.path == ["root", "a", "a1"]
+    assert failed.attempts == _ATTEMPTS_THREE
+    assert failed.elapsed_ms == leaf.elapsed_ms
+
+    cancelled = root.children[1].mark_cancelled(report)
+
+    assert cancelled.node_id == "b"
+    assert cancelled.path == ["root", "b"]
+    assert report.errors == [failed, cancelled]
+
+
+def test_tree_node_adopts_children_given_to_the_constructor() -> None:
+    """Test parentless children passed to the constructor get a parent."""
+    child: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="c"))
+    node: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="r"), children=[child])
+
+    assert child.parent is node
+    assert child.path == ["r", "c"]
+
+
+def test_replace_does_not_take_children_from_the_original_tree() -> None:
+    """Test a shallow copy leaves the original tree's parent links alone."""
+    root = _sample_tree()
+    node_a = root.children[0]
+
+    copy = dataclasses.replace(node_a, error=None)
+
+    assert copy.parent is None
+    assert node_a.children[0].parent is node_a
+    assert node_a.children[0].path == ["root", "a", "a1"]
+
+
+def test_outcomes_maps_each_id_to_its_result_or_error() -> None:
+    """Test outcomes gives the result, or the error, of every settled node."""
+    root = _sample_tree()
+    node_a, node_b = root.children
+    report = TraversalReport()
+
+    root_result: FetchResult[FileItem] = FetchResult()
+    b_result: FetchResult[FileItem] = FetchResult()
+    root.mark_fetched(root_result, report)
+    node_b.mark_fetched(b_result, report)
+    failed = node_a.mark_failed(ValueError("boom"), report, traceback=None)
+    cancelled = node_a.children[0].mark_cancelled(report)
+
+    outcomes = root.outcomes
+
+    assert outcomes["root"] is root_result
+    assert outcomes["b"] is b_result
+    assert outcomes["a"] is failed
+    assert outcomes["a1"] is cancelled
+    assert outcomes.get("missing") is None
+    assert node_a.outcomes.keys() == {"a", "a1"}
+
+
+def test_outcomes_leaves_out_unsettled_and_skipped_nodes() -> None:
+    """Test a skipped duplicate never hides the fetch that did happen."""
+    root = _sample_tree()
+    node_a, node_b = root.children
+    report = TraversalReport()
+
+    # The skipped "x" under "a" comes before the fetched "x" under "b".
+    node_a.record_duplicate_child(ChildRef(id="x"), report, path=node_a.path)
+    x_result: FetchResult[FileItem] = FetchResult()
+    node_b.spawn_child(ChildRef(id="x")).mark_fetched(x_result, report)
+
+    assert [n.node_id for n in root.subtree].count("x") == _ITEMS_TWO
+    assert root.outcomes == {"x": x_result}
+    assert root.outcomes["x"] is x_result
+
+
+def test_outcomes_takes_the_first_node_when_an_id_repeats() -> None:
+    """Test the first fetched node in pre-order wins for a repeated ID."""
+    root: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="root"))
+    report = TraversalReport()
+    first: FetchResult[FileItem] = FetchResult(extra={"n": 1})
+    second: FetchResult[FileItem] = FetchResult(extra={"n": 2})
+    root.spawn_child(ChildRef(id="twin")).mark_fetched(first, report)
+    root.spawn_child(ChildRef(id="twin")).mark_fetched(second, report)
+
+    assert root.outcomes["twin"] is first
+
+
+def test_has_failures_covers_every_error_kind() -> None:
+    """Test has_failures is set by a failed, cancelled or skipped node."""
+    assert TraversalReport().has_failures is False
+
+    root = _sample_tree()
+    node_a, node_b = root.children
+
+    failed = TraversalReport()
+    node_a.mark_failed(ValueError("boom"), failed, traceback=None)
+    cancelled = TraversalReport()
+    node_b.mark_cancelled(cancelled)
+    skipped = TraversalReport()
+    root.record_duplicate_child(ChildRef(id="a"), skipped, path=root.path)
+
+    assert failed.has_failures is True
+    assert cancelled.has_failures is True
+    assert skipped.has_failures is True

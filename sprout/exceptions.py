@@ -54,6 +54,33 @@ class FetcherError(SproutError):
         self.original_error = original_error
 
 
+class NodeTimeoutError(SproutError, TimeoutError):
+    """Raised when one fetch attempt exceeds the per-node timeout.
+
+    It is a ``TimeoutError``, so a retry predicate that accepts
+    ``TimeoutError`` accepts it too.
+
+    Attributes:
+        node_id: ID of the node whose fetch timed out.
+        timeout: The per-node timeout that was exceeded, in seconds.
+
+    """
+
+    def __init__(self, node_id: str, timeout: float) -> None:
+        """Initialize with the node ID and the timeout it exceeded.
+
+        Args:
+            node_id: ID of the node whose fetch timed out.
+            timeout: The per-node timeout that was exceeded, in seconds.
+
+        """
+        super().__init__(
+            f"Fetch of node {node_id} exceeded node_timeout of {timeout}s",
+        )
+        self.node_id = node_id
+        self.timeout = timeout
+
+
 class TraversalAbortedError(SproutError):
     """Raised when traversal is aborted due to a node error.
 

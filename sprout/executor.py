@@ -2,9 +2,12 @@
 
 import asyncio
 import contextlib
+import math
+import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import cast, get_args
 
 from .clock import DynamicClock, GrandClock, StaticClock
 from .concurrency import ConcurrencyGate
@@ -12,24 +15,32 @@ from .config import ExecutorConfig
 from .exceptions import (
     FetcherError,
     InvalidParameterError,
+    NodeTimeoutError,
     TraversalAbortedError,
 )
 from .models import (
     ChildRef,
     FetchResult,
+    NodeError,
     TraversalReport,
     TreeNode,
 )
 from .retry import RetryConfig
-from .typedefs import Fetcher, OnNodeError, ProgressHook
+from .typedefs import Fetcher, OnDuplicate, OnNodeError, ProgressHook
 
 
 def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
-    """Extract and truncate exception traceback.
+    """Extract and truncate exception traceback, keeping each tail.
+
+    A chained exception is formatted as one section per exception, root
+    cause first. When the whole is too long, every section keeps its tail:
+    the innermost frames and the exception line. A wrapped error therefore
+    still shows where the original one arose, such as the line a fetch was
+    hanging on when its node timeout fired.
 
     Args:
         exc: Exception to extract traceback from.
-        max_lines: Maximum lines to keep.
+        max_lines: Approximate number of lines to keep.
 
     Returns:
         Truncated traceback string.
@@ -38,7 +49,54 @@ def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
     tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
     if len(tb_lines) <= max_lines:
         return "".join(tb_lines)
-    return "".join(tb_lines[:max_lines]) + "\n... (truncated)"
+
+    # The line that links two chained exceptions starts with a newline.
+    sections: list[list[str]] = [[]]
+    for line in tb_lines:
+        if line.startswith("\n"):
+            sections.append([])
+        sections[-1].append(line)
+
+    keep = max(max_lines // len(sections), 2)
+    parts: list[str] = []
+    for section in sections:
+        if len(section) <= keep:
+            parts.extend(section)
+            continue
+        link = section[0] if section[0].startswith("\n") else ""
+        parts.extend([link, "... (truncated)\n", *section[-keep:]])
+    return "".join(parts)
+
+
+def blocking_fetcher[T](
+    fetch: Callable[[ChildRef, int], FetchResult[T]],
+) -> Fetcher[T]:
+    """Adapt a blocking fetch function to the async ``Fetcher`` protocol.
+
+    Each call runs in a worker thread, so a fetcher built on a blocking
+    client can be used unchanged.
+
+    A blocking call cannot be interrupted: on a timeout the node is recorded
+    and the report is final, but the thread runs until the call returns.
+    ``node_timeout`` therefore frees a concurrency slot while its thread is
+    still busy, so more calls than ``max_at_once`` can run at once and a
+    retry can overlap the abandoned call. Give the underlying client its own
+    timeout and leave ``node_timeout`` unset.
+
+    Args:
+        fetch: Blocking function taking a node reference and its depth.
+
+    Returns:
+        Async fetcher that runs ``fetch`` in a worker thread.
+
+    """
+
+    async def fetcher(ref: ChildRef, depth: int, /) -> FetchResult[T]:
+        # ponytail: the loop's default thread pool caps real concurrency at
+        # its own size; give the loop a larger pool if max_at_once exceeds it.
+        return await asyncio.to_thread(fetch, ref, depth)
+
+    return fetcher
 
 
 @dataclass
@@ -51,6 +109,7 @@ class _SpawnContext[T]:
         node_map: Mapping from task to tree node.
         max_depth: Maximum traversal depth (None = unbounded).
         clock: Grand timeout clock.
+        seen_refs: IDs of every ref spawned so far in this traversal.
 
     """
 
@@ -59,6 +118,7 @@ class _SpawnContext[T]:
     node_map: dict[asyncio.Task[FetchResult[T]], "TreeNode[T]"]
     max_depth: int | None
     clock: GrandClock
+    seen_refs: set[str]
 
 
 class Executor[T]:
@@ -67,14 +127,20 @@ class Executor[T]:
     Orchestrates recursive fetching with retry, concurrency control,
     grand timeout, configurable error handling, deduplication, and
     full ancestor path tracking.
+
+    One Executor can run any number of traversals, one after another or
+    concurrently on one event loop. Each traversal has its own dedup state;
+    they share the concurrency and rate limits. An Executor is not
+    thread-safe: do not run traversals on it from two threads at once.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         fetcher: Fetcher[T],
         config: ExecutorConfig | None = None,
         *,
         on_node_error: OnNodeError = "skip_mark",
+        on_duplicate: OnDuplicate = "skip_mark",
         retry_config: RetryConfig | None = None,
         progress_hook: ProgressHook | None = None,
     ) -> None:
@@ -84,23 +150,44 @@ class Executor[T]:
             fetcher: Async callable that fetches children for a node.
             config: Executor tuning (defaults when omitted).
             on_node_error: Error handling policy.
+            on_duplicate: What to do with a child ref whose ID was already
+                seen. ``skip_mark`` fetches each ID once per traversal and
+                records later sightings as ``duplicate_skipped``. ``allow``
+                fetches the same ID under every parent that returns it; only
+                a ref that is its own ancestor (a cycle) is skipped.
             retry_config: Override retry configuration (uses config values
                 if None).
-            progress_hook: Optional hook called on child discovery and
-                leaf completion.
+            progress_hook: Optional hook called on child discovery, leaf
+                completion and, if it defines ``on_node_error``, node errors.
 
         """
         cfg = config or ExecutorConfig()
+        for param, value, allowed in (
+            ("on_node_error", on_node_error, get_args(OnNodeError)),
+            ("on_duplicate", on_duplicate, get_args(OnDuplicate)),
+        ):
+            if value not in allowed:
+                raise InvalidParameterError(
+                    param=param,
+                    requirement=f"one of {allowed}",
+                )
+        if cfg.node_timeout is not None and (
+            math.isnan(cfg.node_timeout) or cfg.node_timeout <= 0
+        ):
+            raise InvalidParameterError(
+                param="node_timeout",
+                requirement="> 0 (or None for no per-node timeout)",
+            )
         self._fetcher = fetcher
         self._retry_config = retry_config or RetryConfig(
             max_attempts=cfg.retry_max_attempts,
         )
         self._gate = ConcurrencyGate(cfg.max_at_once, cfg.max_per_second)
         self._level_timeout = cfg.level_timeout
+        self._node_timeout = cfg.node_timeout
         self._on_node_error = on_node_error
+        self._on_duplicate = on_duplicate
         self._progress_hook = progress_hook
-        self._parent_map: dict[str, str | None] = {}
-        self._seen_refs: set[str] = set()
 
     async def expand_bounded(
         self,
@@ -124,7 +211,6 @@ class Executor[T]:
         if depth < 1:
             raise InvalidParameterError(param="depth", requirement=">= 1")
 
-        self._reset_state()
         clock = StaticClock(depth * self._level_timeout)
         return await self._execute(root_ref, depth, clock)
 
@@ -144,17 +230,49 @@ class Executor[T]:
             TraversalAbortedError: If on_node_error="abort" and a node fails.
 
         """
-        self._reset_state()
         clock = DynamicClock(
             base_seconds=self._level_timeout,
             per_level_seconds=self._level_timeout,
         )
         return await self._execute(root_ref, None, clock)
 
-    def _reset_state(self) -> None:
-        """Reset per-run mutable state."""
-        self._parent_map = {}
-        self._seen_refs = set()
+    def run_sync(
+        self,
+        root_ref: ChildRef,
+        depth: int | None = None,
+    ) -> tuple[TreeNode[T], TraversalReport]:
+        """Run a traversal to completion from synchronous code.
+
+        Starts its own event loop, so it cannot be called from inside a
+        running one; await ``expand_bounded``/``expand_unbounded`` there.
+
+        With a ``blocking_fetcher``, this waits for the worker threads
+        before returning, also after a timeout: a blocking call that is
+        still running cannot be interrupted. asyncio caps that wait at five
+        minutes.
+
+        Args:
+            root_ref: Reference to the root node.
+            depth: Maximum depth to traverse (None = unbounded).
+
+        Returns:
+            Tuple of (root TreeNode, TraversalReport).
+
+        Raises:
+            InvalidParameterError: If depth < 1.
+            TraversalAbortedError: If on_node_error="abort" and a node fails.
+
+        """
+        traversal = (
+            self.expand_unbounded(root_ref)
+            if depth is None
+            else self.expand_bounded(root_ref, depth)
+        )
+        try:
+            return asyncio.run(traversal)
+        finally:
+            # Never started if asyncio.run() refused a running loop.
+            traversal.close()
 
     async def _execute(
         self,
@@ -180,9 +298,6 @@ class Executor[T]:
         live_tasks: set[asyncio.Task[FetchResult[T]]] = set()
         node_map: dict[asyncio.Task[FetchResult[T]], TreeNode[T]] = {}
 
-        self._parent_map[root_ref.id] = None
-        self._seen_refs.add(root_ref.id)
-
         timeout_task = asyncio.create_task(clock.wait_for_timeout())
 
         ctx: _SpawnContext[T] = _SpawnContext(
@@ -191,54 +306,68 @@ class Executor[T]:
             node_map=node_map,
             max_depth=max_depth,
             clock=clock,
+            seen_refs={root_ref.id},
         )
 
         root_task = self._create_fetch_task(root_node, clock)
         live_tasks.add(root_task)
         node_map[root_task] = root_node
 
-        while live_tasks:
-            wait_set: set[asyncio.Task[FetchResult[T]] | asyncio.Task[None]] = {
-                timeout_task,
-                *live_tasks,
-            }
-            done, pending = await asyncio.wait(
-                wait_set,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            live_tasks = cast(
-                "set[asyncio.Task[FetchResult[T]]]",
-                {task for task in pending if task is not timeout_task},
-            )
-            ctx.live_tasks = live_tasks
+        try:
+            while live_tasks:
+                wait_set: set[asyncio.Task[FetchResult[T]] | asyncio.Task[None]] = {
+                    timeout_task,
+                    *live_tasks,
+                }
+                done, pending = await asyncio.wait(
+                    wait_set,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                live_tasks = cast(
+                    "set[asyncio.Task[FetchResult[T]]]",
+                    pending - {timeout_task},
+                )
+                ctx.live_tasks = live_tasks
 
-            for task in done:
-                if task is timeout_task:
+                # Fetches that finished in the same wakeup as the grand timeout
+                # are still accounted for before the timeout is handled.
+                for fetch_task in cast(
+                    "set[asyncio.Task[FetchResult[T]]]",
+                    done - {timeout_task},
+                ):
+                    node = node_map.pop(fetch_task)
+
+                    if fetch_task.cancelled():
+                        report.timed_out = report.timed_out or clock.is_cancelled
+                        self._hook_node_error(node.mark_cancelled(report))
+                        continue
+
+                    try:
+                        fetch_result = fetch_task.result()
+                    except FetcherError as fetcher_err:
+                        self._handle_fetch_error(
+                            node,
+                            fetcher_err.original_error,
+                            report,
+                        )
+                    else:
+                        self._handle_success_and_spawn_children(
+                            node,
+                            fetch_result,
+                            ctx,
+                        )
+
+                if timeout_task in done:
                     await self._handle_timeout(report, live_tasks, node_map)
-                    break
-
-                fetch_task = cast("asyncio.Task[FetchResult[T]]", task)
-                node = node_map.pop(fetch_task)
-
-                try:
-                    fetch_result = await fetch_task
-                    self._handle_success_and_spawn_children(
-                        node,
-                        fetch_result,
-                        ctx,
-                    )
-                except FetcherError as fetcher_err:
-                    await self._handle_fetch_error(
-                        node,
-                        fetcher_err.original_error,
-                        report,
-                        live_tasks,
-                    )
-
-        if not timeout_task.done():
+        finally:
+            # Anything still mapped was not handled: the traversal aborted or
+            # its caller cancelled it. Do not leave those fetches running.
+            # Cancel all of them before waiting, so a second cancellation
+            # arriving during the wait leaves nothing running.
             timeout_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await timeout_task
+            for task in node_map:
+                task.cancel()
+            await asyncio.gather(timeout_task, *node_map, return_exceptions=True)
 
         report.elapsed_ms = clock.elapsed_ms
         return root_node, report
@@ -250,23 +379,26 @@ class Executor[T]:
         node_map: dict[asyncio.Task[FetchResult[T]], "TreeNode[T]"],
     ) -> None:
         """Cancel all live tasks on grand timeout and mark nodes."""
+        if not live_tasks:
+            return
         report.timed_out = True
         for task in live_tasks:
             task.cancel()
         await asyncio.gather(*live_tasks, return_exceptions=True)
         for task in list(live_tasks):
             node = node_map.pop(task)
-            node.mark_cancelled(report, path=self._build_path(node))
+            self._hook_node_error(node.mark_cancelled(report))
         live_tasks.clear()
 
-    async def _handle_fetch_error(
+    def _handle_fetch_error(
         self,
         node: "TreeNode[T]",
         exc: Exception,
         report: TraversalReport,
-        live_tasks: set[asyncio.Task[FetchResult[T]]],
     ) -> None:
         """Handle fetch error — skip_mark or abort depending on policy.
+
+        On abort the caller's cleanup cancels the fetches still in flight.
 
         Raises:
             TraversalAbortedError: If on_node_error="abort".
@@ -275,16 +407,11 @@ class Executor[T]:
         node_error = node.mark_failed(
             exc,
             report,
-            attempts=self._retry_config.max_attempts,
             traceback=_truncate_traceback(exc),
-            path=self._build_path(node),
         )
+        self._hook_node_error(node_error)
 
         if self._on_node_error == "abort":
-            for task in live_tasks:
-                task.cancel()
-            await asyncio.gather(*live_tasks, return_exceptions=True)
-            live_tasks.clear()
             raise TraversalAbortedError(
                 message=(f"Traversal aborted due to error at node {node_error.node_id}"),
                 node_id=node_error.node_id,
@@ -306,7 +433,7 @@ class Executor[T]:
                 lambda t: t.exception() if not t.cancelled() else None,
             )
 
-        parent_id = node.ref.id if node.ref else "root"
+        parent_id = node.node_id
 
         if not fetch_result.child_refs:
             self._hook_node_complete(parent_id)
@@ -317,17 +444,25 @@ class Executor[T]:
             self._hook_node_complete(parent_id)
             return
 
+        # "allow" blocks only a ref that is its own ancestor (a cycle);
+        # "skip_mark" blocks every ID spawned so far in this traversal.
+        # ponytail: "allow" costs O(depth) per parent; keep the ancestor set
+        # on the node instead if deep trees make this slow.
+        allow = self._on_duplicate == "allow"
+        path: list[str] | None = node.path if allow else None
+        ancestors = set(path or ())
+
         spawned_ids: list[str] = []
         for child_ref in fetch_result.child_refs:
-            if child_ref.id in self._seen_refs:
-                node.record_duplicate_child(
-                    child_ref,
-                    ctx.report,
-                    path=self._build_path(node),
+            if child_ref.id in (ancestors if allow else ctx.seen_refs):
+                # The path is built once per parent, not per duplicate.
+                path = path or node.path
+                self._hook_node_error(
+                    node.record_duplicate_child(child_ref, ctx.report, path=path),
                 )
                 continue
-            self._seen_refs.add(child_ref.id)
-            self._parent_map[child_ref.id] = parent_id
+            if not allow:
+                ctx.seen_refs.add(child_ref.id)
 
             child_node = node.spawn_child(child_ref)
 
@@ -362,6 +497,18 @@ class Executor[T]:
         with contextlib.suppress(Exception):
             self._progress_hook.on_node_complete(node_id)
 
+    def _hook_node_error(self, error: NodeError) -> None:
+        """Call progress hook on_node_error, if the hook defines it.
+
+        The method is optional so hooks written before it existed keep
+        working. Suppresses any exception raised by the hook.
+        """
+        on_node_error = getattr(self._progress_hook, "on_node_error", None)
+        if on_node_error is None:
+            return
+        with contextlib.suppress(Exception):
+            on_node_error(error.node_id, error)
+
     def _create_fetch_task(
         self,
         node: "TreeNode[T]",
@@ -377,22 +524,27 @@ class Executor[T]:
     ) -> "FetchResult[T]":
         """Fetch a node with retry and concurrency control.
 
+        Records the attempts made and the time spent on the node, also when
+        the fetch fails or is cancelled.
+
         Raises:
             FetcherError: If fetch fails after retries.
             asyncio.CancelledError: If traversal is cancelled.
 
         """
-        node_id = node.ref.id if node.ref else "root"
-
         try:
             async with self._gate.acquire():
                 clock.check_cancelled()
                 retrying = self._retry_config.as_retrying()
-                return await retrying(self._fetch_once, node, clock)
+                started = time.monotonic()
+                try:
+                    return await retrying(self._fetch_once, node, clock)
+                finally:
+                    node.elapsed_ms = int((time.monotonic() - started) * 1000)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise FetcherError(node_id, exc) from exc
+            raise FetcherError(node.node_id, exc) from exc
 
     async def _fetch_once(
         self,
@@ -408,26 +560,21 @@ class Executor[T]:
         Returns:
             Fetch result from the user-provided fetcher.
 
+        Raises:
+            NodeTimeoutError: If the attempt exceeds the per-node timeout.
+
         """
         clock.check_cancelled()
-        return await self._fetcher(
-            node.ref or ChildRef(id="root"),
-            node.depth,
-        )
-
-    def _build_path(self, node: "TreeNode[T]") -> list[str]:
-        """Build full ancestor path from root to this node.
-
-        Args:
-            node: Node to build path for.
-
-        Returns:
-            List of node IDs from root to this node.
-
-        """
-        path: list[str] = []
-        node_id: str | None = node.ref.id if node.ref else "root"
-        while node_id is not None:
-            path.insert(0, node_id)
-            node_id = self._parent_map.get(node_id)
-        return path
+        node.attempts += 1
+        deadline = asyncio.timeout(self._node_timeout)
+        try:
+            async with deadline:
+                return await self._fetcher(
+                    node.ref or ChildRef(id="root"),
+                    node.depth,
+                )
+        except TimeoutError as exc:
+            # A TimeoutError the fetcher raised itself is its own failure.
+            if self._node_timeout is None or not deadline.expired():
+                raise
+            raise NodeTimeoutError(node.node_id, self._node_timeout) from exc
