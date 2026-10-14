@@ -151,6 +151,7 @@ async def test_allow_fetches_sibling_duplicates() -> None:
     assert report.total_nodes == _TOTAL_WITH_DUP
     assert report.skipped_nodes == 0
     assert len(tree.children) == _CHILDREN_WITH_DUP
+    assert [c.path for c in tree.children] == [["root", "dup-child"]] * 2
 
 
 @pytest.mark.asyncio

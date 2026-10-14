@@ -234,8 +234,9 @@ node = by_id["./docs"]
 print(node.ref.payload, node.result, node.error, node.path)
 ```
 
-After a grand timeout, `elapsed_ms` tells the nodes apart: a cancelled node
-that was running reports how long, and one that was still queued reports 0.
+After a grand timeout, `attempts` tells the cancelled nodes apart: 0 means
+the fetch never started. For a node that had started, `elapsed_ms` says how
+long it had been running.
 
 For debugging a run — especially failures or timeouts — dump the whole
 execution graph (tree structure, report, and flattened error list) to JSON:
@@ -262,7 +263,9 @@ executor = Executor[str](fetcher=fetch_dir, on_duplicate="allow")
 
 The same ID is then fetched under every parent that returns it. A ref that
 is its own ancestor is still skipped and recorded, so a cycle terminates.
-IDs are no longer unique in the tree; tell the nodes apart by `node.path`.
+IDs are no longer unique in the tree. Nodes under different parents differ
+by `node.path`. If one parent returns the same ID twice, both are fetched and
+they share a path.
 On a graph with many shared nodes, `allow` fetches each one once per path
 that reaches it, so prefer `expand_bounded` there.
 
@@ -293,6 +296,14 @@ tree, report = executor.run_sync(ChildRef(id="."), depth=3)  # omit depth for un
 
 A blocking call cannot be interrupted. When a timeout fires, the node is
 recorded as timed out or cancelled and the report is final, but the worker
-thread keeps running until the call returns, and `run_sync` itself returns
-only once every worker thread has finished. A fetch that never returns keeps
-`run_sync` from returning. Give the underlying client its own timeout.
+thread keeps running until the call returns. Two things follow:
+
+- `run_sync` waits for the worker threads before it returns. asyncio caps
+  that wait at five minutes; a thread still running after that is abandoned
+  with a warning and holds up interpreter exit instead.
+- `node_timeout` frees the node's concurrency slot while its thread is still
+  busy. More blocking calls than `max_at_once` can then run at once, and a
+  retry can issue the same call alongside the abandoned one.
+
+So for a blocking client, set the client's own timeout and leave
+`node_timeout` unset.
