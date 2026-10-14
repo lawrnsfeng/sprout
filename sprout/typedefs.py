@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
 OnNodeError = Literal["skip_mark", "abort"]
 
+OnDuplicate = Literal["skip_mark", "allow"]
+
 
 class Fetcher[T](Protocol):
     """Protocol for fetching child items from a node.

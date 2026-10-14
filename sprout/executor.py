@@ -23,7 +23,7 @@ from .models import (
     TreeNode,
 )
 from .retry import RetryConfig
-from .typedefs import Fetcher, OnNodeError, ProgressHook
+from .typedefs import Fetcher, OnDuplicate, OnNodeError, ProgressHook
 
 
 def _truncate_traceback(exc: Exception, *, max_lines: int = 20) -> str:
@@ -73,12 +73,13 @@ class Executor[T]:
     full ancestor path tracking.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         fetcher: Fetcher[T],
         config: ExecutorConfig | None = None,
         *,
         on_node_error: OnNodeError = "skip_mark",
+        on_duplicate: OnDuplicate = "skip_mark",
         retry_config: RetryConfig | None = None,
         progress_hook: ProgressHook | None = None,
     ) -> None:
@@ -88,6 +89,11 @@ class Executor[T]:
             fetcher: Async callable that fetches children for a node.
             config: Executor tuning (defaults when omitted).
             on_node_error: Error handling policy.
+            on_duplicate: What to do with a child ref whose ID was already
+                seen. ``skip_mark`` fetches each ID once per traversal and
+                records later sightings as ``duplicate_skipped``. ``allow``
+                fetches the same ID under every parent that returns it; only
+                a ref that is its own ancestor (a cycle) is skipped.
             retry_config: Override retry configuration (uses config values
                 if None).
             progress_hook: Optional hook called on child discovery, leaf
@@ -103,6 +109,7 @@ class Executor[T]:
         self._level_timeout = cfg.level_timeout
         self._node_timeout = cfg.node_timeout
         self._on_node_error = on_node_error
+        self._on_duplicate = on_duplicate
         self._progress_hook = progress_hook
         self._seen_refs: set[str] = set()
 
@@ -335,8 +342,14 @@ class Executor[T]:
 
         spawned_ids: list[str] = []
         path: list[str] | None = None
+        blocked = self._seen_refs
+        if self._on_duplicate == "allow":
+            # ponytail: O(depth) per parent; keep the ancestor set on the
+            # node instead if deep trees make this slow.
+            path = node.path
+            blocked = set(path)
         for child_ref in fetch_result.child_refs:
-            if child_ref.id in self._seen_refs:
+            if child_ref.id in blocked:
                 path = path or node.path
                 self._hook_node_error(
                     node.record_duplicate_child(child_ref, ctx.report, path=path),
