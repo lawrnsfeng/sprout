@@ -47,7 +47,11 @@ async def test_duplicate_ref_is_skipped_with_warning() -> None:
 
     assert report.total_nodes == _TOTAL_WITH_DUP
     assert report.skipped_nodes == 1
-    assert len(tree.children) == _CHILDREN_WITH_DUP
+    assert [c.node_id for c in tree.children] == [
+        "dup-child",
+        "dup-child",
+        "unique-child",
+    ]
 
     dup_errors = [e for e in report.errors if e.kind == "duplicate_skipped"]
     assert len(dup_errors) == 1
@@ -209,7 +213,42 @@ async def test_concurrent_traversals_on_one_executor_are_isolated() -> None:
 
     for root_id, (tree, report) in zip(("root-a", "root-b"), results, strict=True):
         assert report.total_nodes == _CHILDREN_WITH_DUP
-        assert [n.node_id for n in tree.subtree] == [root_id, "shared"]
+        assert [n.node_id for n in tree.subtree] == [root_id, "shared", root_id]
         assert [(e.kind, e.node_id) for e in report.errors] == [
             ("duplicate_skipped", root_id),
         ]
+
+
+@pytest.mark.asyncio
+async def test_skipped_duplicate_is_a_node_under_its_parent() -> None:
+    """Test a skipped ref stays in the tree with its payload and its error."""
+
+    async def fetcher(_ref: ChildRef, depth: int) -> FetchResult[SampleItem]:
+        """Root returns the same ID twice with different payloads."""
+        if depth == 0:
+            return FetchResult(
+                child_refs=[
+                    ChildRef(id="dup", payload="first"),
+                    ChildRef(id="dup", payload="second"),
+                ],
+            )
+        return FetchResult(items=[SampleItem("fetched")])
+
+    executor = Executor[SampleItem](fetcher=fetcher)
+
+    tree, report = await executor.expand_bounded(ChildRef(id="root"), depth=2)
+
+    fetched, skipped = tree.children
+    assert fetched.result is not None
+    assert fetched.error is None
+
+    assert skipped.ref == ChildRef(id="dup", payload="second")
+    assert skipped.parent is tree
+    assert skipped.result is None
+    assert skipped.error is not None
+    assert skipped.error is report.errors[0]
+    assert skipped.error.kind == "duplicate_skipped"
+    assert skipped.path == skipped.error.path == ["root", "dup"]
+
+    assert report.total_nodes == _CHILDREN_WITH_DUP
+    assert tree.outcomes["dup"] is fetched.result

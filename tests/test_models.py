@@ -337,3 +337,73 @@ def test_replace_does_not_take_children_from_the_original_tree() -> None:
     assert copy.parent is None
     assert node_a.children[0].parent is node_a
     assert node_a.children[0].path == ["root", "a", "a1"]
+
+
+def test_outcomes_maps_each_id_to_its_result_or_error() -> None:
+    """Test outcomes gives the result, or the error, of every settled node."""
+    root = _sample_tree()
+    node_a, node_b = root.children
+    report = TraversalReport()
+
+    root_result: FetchResult[FileItem] = FetchResult()
+    b_result: FetchResult[FileItem] = FetchResult()
+    root.mark_fetched(root_result, report)
+    node_b.mark_fetched(b_result, report)
+    failed = node_a.mark_failed(ValueError("boom"), report, traceback=None)
+    cancelled = node_a.children[0].mark_cancelled(report)
+
+    outcomes = root.outcomes
+
+    assert outcomes["root"] is root_result
+    assert outcomes["b"] is b_result
+    assert outcomes["a"] is failed
+    assert outcomes["a1"] is cancelled
+    assert outcomes.get("missing") is None
+    assert node_a.outcomes.keys() == {"a", "a1"}
+
+
+def test_outcomes_leaves_out_unsettled_and_skipped_nodes() -> None:
+    """Test a skipped duplicate never hides the fetch that did happen."""
+    root = _sample_tree()
+    node_a, node_b = root.children
+    report = TraversalReport()
+
+    # The skipped "x" under "a" comes before the fetched "x" under "b".
+    node_a.record_duplicate_child(ChildRef(id="x"), report, path=node_a.path)
+    x_result: FetchResult[FileItem] = FetchResult()
+    node_b.spawn_child(ChildRef(id="x")).mark_fetched(x_result, report)
+
+    assert [n.node_id for n in root.subtree].count("x") == _ITEMS_TWO
+    assert root.outcomes == {"x": x_result}
+    assert root.outcomes["x"] is x_result
+
+
+def test_outcomes_takes_the_first_node_when_an_id_repeats() -> None:
+    """Test the first fetched node in pre-order wins for a repeated ID."""
+    root: TreeNode[FileItem] = TreeNode(ref=ChildRef(id="root"))
+    report = TraversalReport()
+    first: FetchResult[FileItem] = FetchResult(extra={"n": 1})
+    second: FetchResult[FileItem] = FetchResult(extra={"n": 2})
+    root.spawn_child(ChildRef(id="twin")).mark_fetched(first, report)
+    root.spawn_child(ChildRef(id="twin")).mark_fetched(second, report)
+
+    assert root.outcomes["twin"] is first
+
+
+def test_has_failures_covers_every_error_kind() -> None:
+    """Test has_failures is set by a failed, cancelled or skipped node."""
+    assert TraversalReport().has_failures is False
+
+    root = _sample_tree()
+    node_a, node_b = root.children
+
+    failed = TraversalReport()
+    node_a.mark_failed(ValueError("boom"), failed, traceback=None)
+    cancelled = TraversalReport()
+    node_b.mark_cancelled(cancelled)
+    skipped = TraversalReport()
+    root.record_duplicate_child(ChildRef(id="a"), skipped, path=root.path)
+
+    assert failed.has_failures is True
+    assert cancelled.has_failures is True
+    assert skipped.has_failures is True

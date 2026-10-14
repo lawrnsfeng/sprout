@@ -99,12 +99,14 @@ class TraversalReport:
     Attributes:
         total_nodes: Total number of nodes successfully visited.
         failed_nodes: Number of nodes that failed to fetch.
-        cancelled_nodes: Number of nodes cancelled due to timeout.
+        cancelled_nodes: Number of nodes whose fetch ended cancelled, by the
+            grand timeout or from inside the fetcher.
         skipped_nodes: Number of duplicate nodes skipped.
         max_depth_seen: Maximum depth reached during traversal.
         elapsed_ms: Total elapsed time in milliseconds.
-        timed_out: True if grand timeout was exceeded.
-        errors: List of all errors encountered.
+        timed_out: True if the grand timeout cut unfinished work short.
+        errors: List of all errors encountered: failed, timed-out,
+            cancelled and skipped nodes.
 
     """
 
@@ -116,6 +118,15 @@ class TraversalReport:
     elapsed_ms: int = 0
     timed_out: bool = False
     errors: list[NodeError] = field(default_factory=list)
+
+    @property
+    def has_failures(self) -> bool:
+        """Return True if any node failed, timed out, was cancelled or skipped.
+
+        It does not cover depth: ``expand_bounded`` neither fetches nor
+        reports the refs below its depth limit.
+        """
+        return bool(self.errors)
 
     @property
     def as_dict(self) -> dict[str, object]:
@@ -202,6 +213,27 @@ class TreeNode[T]:
             yield node
             stack.extend(reversed(node.children))
 
+    @property
+    def outcomes(self) -> "dict[str, FetchResult[T] | NodeError]":
+        """Map each node ID in this subtree to its fetch result or its error.
+
+        ``outcomes.get(ref_id)`` is the result of a ref that was fetched, the
+        error of one that failed, timed out or was cancelled, and None for an
+        ID that is not in the subtree.
+
+        A node skipped as a duplicate is left out, so its ID maps to the
+        outcome of the fetch that did happen. Where one ID was fetched more
+        than once (``on_duplicate="allow"``), the first in pre-order wins.
+        """
+        outcomes: dict[str, FetchResult[T] | NodeError] = {}
+        for node in self.subtree:
+            if node.error is not None and node.error.kind == "duplicate_skipped":
+                continue
+            outcome = node.error if node.error is not None else node.result
+            if outcome is not None:
+                outcomes.setdefault(node.node_id, outcome)
+        return outcomes
+
     def mark_fetched(
         self,
         fetch_result: "FetchResult[T]",
@@ -265,7 +297,11 @@ class TreeNode[T]:
         *,
         path: list[str],
     ) -> NodeError:
-        """Record a skipped duplicate child ref against this parent node."""
+        """Record a skipped duplicate child ref as an errored child node.
+
+        The child keeps the skipped ref, payload included, and is never
+        fetched, so it has an error and no result.
+        """
         node_error = NodeError(
             kind="duplicate_skipped",
             attempts=0,
@@ -274,6 +310,7 @@ class TreeNode[T]:
             node_id=child_ref.id,
             path=[*path, child_ref.id],
         )
+        self.spawn_child(child_ref).error = node_error
         report.skipped_nodes += 1
         report.errors.append(node_error)
         return node_error
