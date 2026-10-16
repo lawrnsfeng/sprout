@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import math
 import time
 import traceback
 from collections.abc import Callable
@@ -171,13 +170,6 @@ class Executor[T]:
                     param=param,
                     requirement=f"one of {allowed}",
                 )
-        if cfg.node_timeout is not None and (
-            math.isnan(cfg.node_timeout) or cfg.node_timeout <= 0
-        ):
-            raise InvalidParameterError(
-                param="node_timeout",
-                requirement="> 0 (or None for no per-node timeout)",
-            )
         self._fetcher = fetcher
         self._retry_config = retry_config or RetryConfig(
             max_attempts=cfg.retry_max_attempts,

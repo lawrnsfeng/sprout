@@ -1,6 +1,12 @@
 """Tests for Sprout config module."""
 
+import math
+from typing import Any, cast
+
+import pytest
+
 from sprout.config import ExecutorConfig, SproutSettings
+from sprout.exceptions import InvalidParameterError
 
 _DEFAULT_RETRY_MAX = 4
 _DEFAULT_MAX_AT_ONCE = 8
@@ -66,3 +72,43 @@ def test_settings_defaults() -> None:
     assert settings.level_timeout_seconds == _DEFAULT_LEVEL_TIMEOUT
     assert settings.retry_max_attempts == _DEFAULT_RETRY_MAX
     assert settings.node_timeout_seconds is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("retry_max_attempts", 0),
+        ("max_at_once", 0),
+        ("max_per_second", -1.0),
+        ("level_timeout", 0.0),
+        ("node_timeout", 0.0),
+        ("node_timeout", math.nan),
+    ],
+)
+def test_executor_config_rejects_invalid(field_name: str, value: float) -> None:
+    """Test ExecutorConfig rejects out-of-range values, naming the field."""
+    with pytest.raises(InvalidParameterError, match=field_name):
+        ExecutorConfig(**cast("dict[str, Any]", {field_name: value}))
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("retry_max_attempts", 0),
+        ("max_at_once", 0),
+        ("max_per_second", -1.0),
+        ("level_timeout_seconds", 0.0),
+        ("node_timeout_seconds", 0.0),
+        ("node_timeout_seconds", math.nan),
+    ],
+)
+def test_settings_rejects_invalid(field_name: str, value: float) -> None:
+    """Test SproutSettings rejects out-of-range values, naming the field."""
+    with pytest.raises(InvalidParameterError, match=field_name):
+        SproutSettings(**cast("dict[str, Any]", {field_name: value}))
+
+
+def test_config_boundary_values_are_valid() -> None:
+    """Test unlimited rate and no node timeout are accepted."""
+    assert ExecutorConfig(max_per_second=0.0, node_timeout=None)
+    assert SproutSettings(max_per_second=0.0, node_timeout_seconds=None)

@@ -15,6 +15,8 @@ from tenacity import (
 )
 from tenacity.wait import wait_base
 
+from ._checks import require_non_negative
+from .exceptions import InvalidParameterError
 from .typedefs import RetryAfterHook, RetryPredicate
 
 
@@ -82,6 +84,9 @@ class RetryConfig:
         retry_after_hook: Optional hook extracting wait duration
             from exceptions.
 
+    Raises:
+        InvalidParameterError: On construction if a value is out of range.
+
     """
 
     max_attempts: int = 4
@@ -92,6 +97,26 @@ class RetryConfig:
         default_factory=lambda: _always_retry,
     )
     retry_after_hook: RetryAfterHook | None = None
+
+    def __post_init__(self) -> None:
+        """Validate numeric fields.
+
+        Raises:
+            InvalidParameterError: If any field is out of range.
+
+        """
+        if self.max_attempts < 1:
+            raise InvalidParameterError(
+                param="max_attempts",
+                requirement=">= 1",
+            )
+        require_non_negative("min_wait", self.min_wait)
+        if not self.max_wait >= self.min_wait:
+            raise InvalidParameterError(
+                param="max_wait",
+                requirement=f">= min_wait ({self.min_wait})",
+            )
+        require_non_negative("jitter_pct", self.jitter_pct)
 
     def as_retrying(self) -> AsyncRetrying:
         """Build a tenacity AsyncRetrying instance from this config.
