@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - master
+  pull_request:
+    branches:
+      - master
 permissions:
   contents: read
 concurrency:
@@ -25,12 +28,13 @@ jobs:
       - name: Build site
         run: uv run mkdocs build --strict
       - name: Upload Pages artifact
+        if: github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
   deploy:
     needs: build
-    if: github.repository == 'lawrnsfeng/sprout'
+    if: github.event_name == 'push' && github.repository == 'lawrnsfeng/sprout'
     runs-on: ubuntu-latest
     permissions:
       pages: write
