@@ -147,6 +147,8 @@ retry_config = RetryConfig(
 executor = Executor[str](fetcher=fetch_dir, retry_config=retry_config)
 ```
 
+`max_wait` is the ceiling on every retry wait, including waits returned by `retry_after_hook`: a server-requested delay longer than `max_wait` is cut to `max_wait`. Raise `max_wait` if you want long server-directed waits honoured.
+
 ## 5. Error handling policy
 
 By default (`on_node_error="skip_mark"`) a failed node is marked with a

@@ -16,6 +16,7 @@ _CUSTOM_MAX_ATTEMPTS = 2
 _RETRY_ATTEMPTS_3 = 3
 _JITTER_GAP_MIN = 0.05
 _HOOK_WAIT_THRESHOLD = 3
+_HOOK_ELAPSED_LIMIT = 2.0
 
 
 def test_always_retry_predicate() -> None:
@@ -212,6 +213,34 @@ async def test_retry_with_retry_after_hook() -> None:
 
     assert result == "done"
     assert call_count == _RETRY_ATTEMPTS_3
+
+
+@pytest.mark.asyncio
+async def test_retry_after_hook_respects_max_wait() -> None:
+    """Test hook-supplied waits are capped at RetryConfig.max_wait."""
+    config = RetryConfig(
+        max_attempts=_RETRY_ATTEMPTS_3,
+        min_wait=0.01,
+        max_wait=0.05,
+        retry_after_hook=lambda _exc: 30.0,
+    )
+    retrying = config.as_retrying()
+
+    async def always_fails() -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    async def run() -> None:
+        async for attempt in retrying:
+            with attempt:
+                await always_fails()
+
+    start = time.monotonic()
+    with pytest.raises(RuntimeError):
+        await run()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < _HOOK_ELAPSED_LIMIT
 
 
 @pytest.mark.asyncio
