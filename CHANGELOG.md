@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.3.1 (2026-10-17)
+
+### Bug Fixes
+
+- Cap retry_after_hook waits at RetryConfig.max_wait
+  ([#15](https://github.com/lawrnsfeng/sprout/pull/15),
+  [`3e69b13`](https://github.com/lawrnsfeng/sprout/commit/3e69b13032e3e85cc01dfaae122b7be7dd92ab50))
+
+- Honour max_wait for retry hooks, validate configs, build docs in PRs
+  ([#15](https://github.com/lawrnsfeng/sprout/pull/15),
+  [`3e69b13`](https://github.com/lawrnsfeng/sprout/commit/3e69b13032e3e85cc01dfaae122b7be7dd92ab50))
+
+- Validate executor and retry config values ([#15](https://github.com/lawrnsfeng/sprout/pull/15),
+  [`3e69b13`](https://github.com/lawrnsfeng/sprout/commit/3e69b13032e3e85cc01dfaae122b7be7dd92ab50))
+
+### Continuous Integration
+
+- Build docs on pull requests ([#15](https://github.com/lawrnsfeng/sprout/pull/15),
+  [`3e69b13`](https://github.com/lawrnsfeng/sprout/commit/3e69b13032e3e85cc01dfaae122b7be7dd92ab50))
+
+
 ## v0.3.0 (2026-10-14)
 
 ### Bug Fixes
