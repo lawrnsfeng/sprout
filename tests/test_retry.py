@@ -3,9 +3,11 @@
 import asyncio
 import time
 import warnings
+from typing import Any
 
 import pytest
 
+from sprout.exceptions import InvalidParameterError
 from sprout.retry import RetryConfig, _always_retry
 
 _DEFAULT_MAX_ATTEMPTS = 4
@@ -16,6 +18,7 @@ _CUSTOM_MAX_ATTEMPTS = 2
 _RETRY_ATTEMPTS_3 = 3
 _JITTER_GAP_MIN = 0.05
 _HOOK_WAIT_THRESHOLD = 3
+_HOOK_ELAPSED_LIMIT = 2.0
 
 
 def test_always_retry_predicate() -> None:
@@ -50,6 +53,30 @@ def test_retry_config_custom_values() -> None:
     )
     assert config.max_attempts == _CUSTOM_MAX_ATTEMPTS
     assert config.is_retryable is custom_pred
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "field_name"),
+    [
+        ({"max_attempts": 0}, "max_attempts"),
+        ({"min_wait": -1.0}, "min_wait"),
+        ({"jitter_pct": -0.1}, "jitter_pct"),
+        ({"min_wait": 5.0, "max_wait": 1.0}, "max_wait"),
+    ],
+)
+def test_retry_config_rejects_invalid(
+    kwargs: dict[str, Any],
+    field_name: str,
+) -> None:
+    """Test RetryConfig rejects out-of-range values, naming the field."""
+    with pytest.raises(InvalidParameterError, match=field_name):
+        RetryConfig(**kwargs)
+
+
+def test_retry_config_boundary_values_are_valid() -> None:
+    """Test zero min_wait and min_wait == max_wait are accepted."""
+    assert RetryConfig(min_wait=0.0)
+    assert RetryConfig(min_wait=2.0, max_wait=2.0)
 
 
 def test_as_retrying_creates_instance() -> None:
@@ -212,6 +239,34 @@ async def test_retry_with_retry_after_hook() -> None:
 
     assert result == "done"
     assert call_count == _RETRY_ATTEMPTS_3
+
+
+@pytest.mark.asyncio
+async def test_retry_after_hook_respects_max_wait() -> None:
+    """Test hook-supplied waits are capped at RetryConfig.max_wait."""
+    config = RetryConfig(
+        max_attempts=_RETRY_ATTEMPTS_3,
+        min_wait=0.01,
+        max_wait=0.05,
+        retry_after_hook=lambda _exc: 30.0,
+    )
+    retrying = config.as_retrying()
+
+    async def always_fails() -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    async def run() -> None:
+        async for attempt in retrying:
+            with attempt:
+                await always_fails()
+
+    start = time.monotonic()
+    with pytest.raises(RuntimeError):
+        await run()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < _HOOK_ELAPSED_LIMIT
 
 
 @pytest.mark.asyncio

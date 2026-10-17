@@ -15,6 +15,8 @@ from tenacity import (
 )
 from tenacity.wait import wait_base
 
+from ._checks import require_non_negative
+from .exceptions import InvalidParameterError
 from .typedefs import RetryAfterHook, RetryPredicate
 
 
@@ -29,17 +31,25 @@ class _HookedWait(wait_base):
     Falls back to exponential jitter when the hook returns no override.
     """
 
-    def __init__(self, base: wait_base, hook: RetryAfterHook | None) -> None:
+    def __init__(
+        self,
+        base: wait_base,
+        hook: RetryAfterHook | None,
+        *,
+        max_wait: float,
+    ) -> None:
         """Initialise with a base wait strategy and an optional hook.
 
         Args:
             base: Fallback wait strategy (e.g. wait_exponential_jitter).
             hook: Caller-provided hook extracting wait seconds from exceptions.
                 When None, the base strategy is always used.
+            max_wait: Ceiling in seconds applied to any wait the hook returns.
 
         """
         self._base = base
         self._hook = hook
+        self._max_wait = max_wait
 
     def __call__(self, retry_state: RetryCallState) -> float:
         """Return wait duration in seconds for this retry attempt.
@@ -56,7 +66,7 @@ class _HookedWait(wait_base):
             if exc is not None:
                 wait_secs = self._hook(exc)
                 if wait_secs is not None and wait_secs > 0:
-                    return min(wait_secs, 60.0)
+                    return min(wait_secs, self._max_wait)
         return self._base(retry_state)
 
 
@@ -74,6 +84,9 @@ class RetryConfig:
         retry_after_hook: Optional hook extracting wait duration
             from exceptions.
 
+    Raises:
+        InvalidParameterError: On construction if a value is out of range.
+
     """
 
     max_attempts: int = 4
@@ -84,6 +97,26 @@ class RetryConfig:
         default_factory=lambda: _always_retry,
     )
     retry_after_hook: RetryAfterHook | None = None
+
+    def __post_init__(self) -> None:
+        """Validate numeric fields.
+
+        Raises:
+            InvalidParameterError: If any field is out of range.
+
+        """
+        if self.max_attempts < 1:
+            raise InvalidParameterError(
+                param="max_attempts",
+                requirement=">= 1",
+            )
+        require_non_negative("min_wait", self.min_wait)
+        if not self.max_wait >= self.min_wait:
+            raise InvalidParameterError(
+                param="max_wait",
+                requirement=f">= min_wait ({self.min_wait})",
+            )
+        require_non_negative("jitter_pct", self.jitter_pct)
 
     def as_retrying(self) -> AsyncRetrying:
         """Build a tenacity AsyncRetrying instance from this config.
@@ -97,7 +130,11 @@ class RetryConfig:
             max=self.max_wait,
             jitter=self.jitter_pct,
         )
-        wait = _HookedWait(base_wait, self.retry_after_hook)
+        wait = _HookedWait(
+            base_wait,
+            self.retry_after_hook,
+            max_wait=self.max_wait,
+        )
         return AsyncRetrying(
             stop=stop_after_attempt(self.max_attempts),
             wait=wait,

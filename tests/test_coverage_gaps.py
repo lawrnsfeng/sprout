@@ -20,8 +20,9 @@ from sprout.retry import RetryConfig, _HookedWait
 _FLAKY_SUCCEED_ON = 3
 _RETRY_MIN_WAIT = 0.01
 _HOOK_WAIT_RETURN = 5.0
-_HOOK_WAIT_CAPPED = 60.0
-_HOOK_WAIT_OVER_CAP = 100.0
+_HOOK_WAIT_OVER_CAP = 30.0
+_HOOK_MAX_WAIT = 60.0
+_HOOK_WAIT_CAPPED = 2.0
 _BASE_WAIT_DEFAULT = 1.5
 
 
@@ -161,7 +162,7 @@ def test_hooked_wait_no_outcome() -> None:
     """Test _HookedWait falls back to base when outcome is None."""
     base = MagicMock(return_value=_BASE_WAIT_DEFAULT)
     hook = MagicMock(return_value=5.0)
-    hw = _HookedWait(base, hook)
+    hw = _HookedWait(base, hook, max_wait=_HOOK_MAX_WAIT)
 
     state = MagicMock()
     state.outcome = None
@@ -175,7 +176,7 @@ def test_hooked_wait_no_exception() -> None:
     """Test _HookedWait falls back to base when outcome has no exception."""
     base = MagicMock(return_value=_BASE_WAIT_DEFAULT)
     hook = MagicMock(return_value=5.0)
-    hw = _HookedWait(base, hook)
+    hw = _HookedWait(base, hook, max_wait=_HOOK_MAX_WAIT)
 
     state = MagicMock()
     state.outcome.exception.return_value = None
@@ -189,7 +190,7 @@ def test_hooked_wait_hook_returns_none() -> None:
     """Test _HookedWait falls back to base when hook returns None."""
     base = MagicMock(return_value=_BASE_WAIT_DEFAULT)
     hook = MagicMock(return_value=None)
-    hw = _HookedWait(base, hook)
+    hw = _HookedWait(base, hook, max_wait=_HOOK_MAX_WAIT)
 
     state = MagicMock()
     state.outcome.exception.return_value = RuntimeError("err")
@@ -202,7 +203,7 @@ def test_hooked_wait_hook_returns_zero() -> None:
     """Test _HookedWait falls back to base when hook returns zero."""
     base = MagicMock(return_value=_BASE_WAIT_DEFAULT)
     hook = MagicMock(return_value=0.0)
-    hw = _HookedWait(base, hook)
+    hw = _HookedWait(base, hook, max_wait=_HOOK_MAX_WAIT)
 
     state = MagicMock()
     state.outcome.exception.return_value = RuntimeError("err")
@@ -215,7 +216,7 @@ def test_hooked_wait_applies_hook_wait() -> None:
     """Test _HookedWait returns hook's value when positive."""
     base = MagicMock(return_value=1.5)
     hook = MagicMock(return_value=_HOOK_WAIT_RETURN)
-    hw = _HookedWait(base, hook)
+    hw = _HookedWait(base, hook, max_wait=_HOOK_MAX_WAIT)
 
     state = MagicMock()
     state.outcome.exception.return_value = RuntimeError("err")
@@ -225,11 +226,11 @@ def test_hooked_wait_applies_hook_wait() -> None:
     base.assert_not_called()
 
 
-def test_hooked_wait_caps_at_60_seconds() -> None:
-    """Test _HookedWait caps hook return value at 60 seconds."""
+def test_hooked_wait_caps_at_max_wait() -> None:
+    """Test _HookedWait caps hook return value at the configured max_wait."""
     base = MagicMock(return_value=1.5)
     hook = MagicMock(return_value=_HOOK_WAIT_OVER_CAP)
-    hw = _HookedWait(base, hook)
+    hw = _HookedWait(base, hook, max_wait=_HOOK_WAIT_CAPPED)
 
     state = MagicMock()
     state.outcome.exception.return_value = RuntimeError("err")
